@@ -1,0 +1,16 @@
+# Example RKE2 config for server role
+# Copy to /etc/rancher/rke2/config.yaml or use --config flag
+
+write-kubeconfig-mode: "0644"
+
+# Set if this is the first server in the cluster
+# cluster-init: true
+
+# If you want to enforce SANs for the API server certificate
+# tls-san:
+#   - "rke2.example.com"
+
+# Cluster token (if not set via installer flags)
+# token: "supersecret-token"
+
+
