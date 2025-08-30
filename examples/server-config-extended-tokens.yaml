@@ -1,0 +1,28 @@
+# Example RKE2 config for server role with extended CNI token expiration
+# Copy to /etc/rancher/rke2/config.yaml or use --config flag
+# This configuration extends CNI token expiration to 7 business days (168 hours)
+
+write-kubeconfig-mode: "0644"
+
+# Set if this is the first server in the cluster
+# cluster-init: true
+
+# If you want to enforce SANs for the API server certificate
+# tls-san:
+#   - "rke2.example.com"
+
+# Cluster token (if not set via installer flags)
+# token: "supersecret-token"
+
+# Extended CNI token expiration (7 business days = 168 hours)
+# This prevents the common issue of CNI tokens expiring every 24 hours
+kube-apiserver-arg:
+  - "service-account-max-token-expiration=168h"
+  - "service-account-extend-token-expiration=true"
+
+# Alternative: Use environment variables for token configuration
+# env:
+#   - name: SERVICE_ACCOUNT_MAX_TOKEN_EXPIRATION
+#     value: "168h"
+#   - name: SERVICE_ACCOUNT_EXTEND_TOKEN_EXPIRATION
+#     value: "true"
