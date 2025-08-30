@@ -72,8 +72,57 @@ sudo ./scripts/rke2-installer.sh install --role server --config ./examples/serve
 If you don't provide `--config`, the script will generate a minimal `/etc/rancher/rke2/config.yaml` based on flags.
 
 Configuration examples are in the `examples/` directory:
-- `examples/server-config.yaml`
-- `examples/agent-config.yaml`
+- `examples/server-config.yaml` - Basic server configuration
+- `examples/agent-config.yaml` - Agent configuration
+- `examples/server-config-extended-tokens.yaml` - Server config with extended CNI token expiration (7 days)
+
+### CNI Configuration and Token Issues
+RKE2 uses **Canal** (Flannel + Calico) as the default CNI. A common issue is **expired CNI tokens** that cause network policy failures.
+
+**Problem:** CNI tokens expire every 24 hours, causing:
+- Failed pod creation: `plugin type="calico" failed: connection is unauthorized`
+- Network policy failures
+- Pod sandbox creation errors
+
+**Solutions:**
+
+1. **Temporary fix (restart Canal pods):**
+```bash
+# Restart Canal to regenerate tokens
+kubectl rollout restart daemonset/rke2-canal -n kube-system
+
+# Wait for pods to be ready
+kubectl get pods -n kube-system -l k8s-app=canal -w
+```
+
+2. **Permanent fix (extend token expiration to 7 business days):**
+```bash
+# Edit RKE2 config
+sudo nano /etc/rancher/rke2/config.yaml
+
+# Add these lines:
+kube-apiserver-arg:
+  - "service-account-max-token-expiration=168h"  # 7 days
+  - "service-account-extend-token-expiration=true"
+
+# Restart RKE2 server
+sudo systemctl restart rke2-server
+
+# Verify token expiration
+kubectl get serviceaccount -n kube-system canal -o yaml | grep -A 5 -B 5 "token"
+```
+
+3. **Verify CNI is working:**
+```bash
+# Check Canal pods status
+kubectl get pods -n kube-system -l k8s-app=canal
+
+# Check for token errors in logs
+kubectl logs -n kube-system -l k8s-app=canal -c calico-node | grep -i "unauthorized\|forbidden"
+
+# Test network connectivity
+kubectl run test-pod --image=busybox --rm -it --restart=Never -- nslookup kubernetes.default
+```
 
 ### Update / force version
 By default, the `stable` channel is used. You can specify a version or channel:
@@ -145,6 +194,43 @@ Run the test suite to validate the installer:
 ./scripts/test-installer.sh
 ```
 
+### Troubleshooting CNI Issues
+If you experience network problems after deployment:
+
+**Symptoms:**
+- Pods fail to start with `FailedCreatePodSandBox` errors
+- Network policies not working
+- Calico logs show `connection is unauthorized`
+
+**Quick diagnosis:**
+```bash
+# Check if Canal pods are running
+kubectl get pods -n kube-system -l k8s-app=canal
+
+# Check for token expiration errors
+kubectl logs -n kube-system -l k8s-app=canal -c calico-node --tail=50 | grep -i "unauthorized\|forbidden\|expir"
+
+# Check CNI configuration
+ls -la /etc/cni/net.d/
+cat /etc/cni/net.d/10-canal.conflist
+```
+
+**Immediate fix:**
+```bash
+# Restart Canal pods to regenerate tokens
+kubectl rollout restart daemonset/rke2-canal -n kube-system
+
+# Monitor restart
+kubectl get pods -n kube-system -l k8s-app=canal -w
+```
+
+**Prevention:**
+- Use the permanent token expiration fix above
+- Monitor Canal pod logs for early warning signs
+- Set up alerts for pod creation failures
+
+
+
 **Test Results:**
 The installer has been thoroughly tested and validated:
 - ✅ **25/25 tests passed** - All functionality verified
@@ -177,6 +263,7 @@ See `LICENSE` file.
 **Examples:**
 - `examples/server-config.yaml` - Example server configuration
 - `examples/agent-config.yaml` - Example agent configuration
+- `examples/server-config-extended-tokens.yaml` - Server config with extended CNI token expiration
 
 ### Production Status
 ✅ **Production Ready** - All components tested and verified for production use.
