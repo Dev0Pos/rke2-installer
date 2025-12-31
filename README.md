@@ -267,7 +267,7 @@ See `LICENSE` file.
 
 ### Production Status
 ✅ **Production Ready** - All components tested and verified for production use.
-- RKE2 Version: v1.32.7+rke2r1
-- Kubernetes Version: v1.32.7+rke2r1
+- RKE2 Version: v1.33.7+rke2r1
+- Kubernetes Version: v1.33.7+rke2r1
 - Supported OS: Red Hat Enterprise Linux 9.6, Ubuntu, CentOS
 - Architecture: x86_64, amd64, aarch64, arm64
