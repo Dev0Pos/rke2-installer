@@ -26,10 +26,12 @@ Optional: disabled swap (script can do this automatically with `--auto-swapoff` 
 - ✅ Version and channel specification
 - ✅ Force reinstall option
 - ✅ Optional secure installer mode (`--secure-install`, no pipe-to-shell)
+- ✅ Installer checksum verification (`--installer-sha256` / `--installer-sha256-url`)
 - ✅ Dedicated uninstaller with dry-run mode
 - ✅ Comprehensive test suite
 - ✅ Automatic role detection
 - ✅ Enhanced error handling and logging
+- ✅ Automated release artifacts and release notes
 
 ### Quick start
 1) Server (first node):
@@ -37,6 +39,10 @@ Optional: disabled swap (script can do this automatically with `--auto-swapoff` 
 sudo ./scripts/rke2-installer.sh install --role server --cluster-init
 # Safer mode (downloads installer script before execution)
 sudo ./scripts/rke2-installer.sh install --role server --cluster-init --secure-install
+# Safer mode with explicit SHA256 verification
+sudo ./scripts/rke2-installer.sh install --role server --cluster-init --secure-install --installer-sha256 <sha256>
+# Safer mode with checksum file URL verification
+sudo ./scripts/rke2-installer.sh install --role server --cluster-init --secure-install --installer-sha256-url <checksum-url>
 ```
 
 2) Agent:
@@ -202,6 +208,14 @@ Run 100% coverage verification:
 ./scripts/check-coverage.sh
 ```
 
+### Release artifacts
+Build release package locally:
+```bash
+./scripts/build-release-artifacts.sh vX.Y.Z
+```
+
+The repository also publishes release artifacts automatically for tags matching `v*`.
+
 ### Troubleshooting CNI Issues
 If you experience network problems after deployment:
 
@@ -268,8 +282,10 @@ See `LICENSE` file.
 - `scripts/rke2-uninstaller.sh` - Dedicated uninstaller script
 - `scripts/test-installer.sh` - Installer unit test suite
 - `scripts/test-uninstaller.sh` - Uninstaller unit test suite
+- `scripts/test-integration.sh` - CLI-level integration test suite
 - `scripts/test-all.sh` - Unified test runner
 - `scripts/check-coverage.sh` - 100% coverage gate (xtrace-based)
+- `scripts/build-release-artifacts.sh` - Release package builder (`tar.gz` + `.sha256`)
 
 **Examples:**
 - `examples/server-config.yaml` - Example server configuration

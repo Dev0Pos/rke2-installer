@@ -38,6 +38,9 @@ Installation options:
   --auto-swapoff           Automatically disable swap if active
   --force                  Force reinstall/upgrade even if already installed
   --secure-install         Download installer before execution (no pipe-to-shell)
+  --installer-sha256 <hex> Expected SHA256 of installer script (use with --secure-install)
+  --installer-sha256-url <url>
+                           URL to SHA256 checksum file for installer script
 
 Examples:
   ./scripts/rke2-installer.sh install --role server --cluster-init
@@ -61,6 +64,14 @@ require_root() {
 
 command_exists() {
 	command -v "$1" >/dev/null 2>&1
+}
+
+require_command() {
+	local cmd="$1"
+	if ! command_exists "$cmd"; then
+		log_error "Required command is missing: $cmd"
+		exit 1
+	fi
 }
 
 validate_role() {
@@ -194,6 +205,83 @@ read_space_separated_paths() {
 	printf '%s\n' "${paths[@]}"
 }
 
+is_valid_sha256() {
+	local value="${1:-}"
+	[[ "$value" =~ ^[[:xdigit:]]{64}$ ]]
+}
+
+sha256_file() {
+	local file_path="$1"
+	sha256sum "$file_path" | awk '{print $1}'
+}
+
+extract_checksum_from_file() {
+	local checksum_file="$1"
+	local expected_name="$2"
+	local line hash maybe_name
+
+	while IFS= read -r line; do
+		hash="$(awk '{print $1}' <<<"$line" | tr '[:upper:]' '[:lower:]')"
+		if ! is_valid_sha256 "$hash"; then
+			continue
+		fi
+
+		maybe_name="$(awk '{print $2}' <<<"$line" 2>/dev/null || true)"
+		maybe_name="${maybe_name#\*}"
+		if [[ -z "$maybe_name" || "$maybe_name" == "$(basename "$expected_name")" || "$maybe_name" == "$expected_name" ]]; then
+			echo "$hash"
+			return 0
+		fi
+	done <"$checksum_file"
+
+	return 1
+}
+
+verify_downloaded_installer_checksum() {
+	local installer_path="$1"
+	local checksum_value="$2"
+	local checksum_url="$3"
+	local expected_checksum=""
+	local computed_checksum
+	local checksum_file
+
+	require_command sha256sum
+
+	if [[ -n "$checksum_url" ]]; then
+		checksum_file="$(mktemp)"
+		curl -sfL "$checksum_url" -o "$checksum_file"
+		expected_checksum="$(extract_checksum_from_file "$checksum_file" "$installer_path" || true)"
+		rm -f "$checksum_file"
+
+		if [[ -z "$expected_checksum" ]]; then
+			log_error "Could not extract installer checksum from: $checksum_url"
+			exit 1
+		fi
+	fi
+
+	if [[ -n "$checksum_value" ]]; then
+		expected_checksum="$(tr '[:upper:]' '[:lower:]' <<<"$checksum_value")"
+	fi
+
+	if [[ -z "$expected_checksum" ]]; then
+		log_error "Checksum verification requested, but expected checksum is empty."
+		exit 1
+	fi
+
+	if ! is_valid_sha256 "$expected_checksum"; then
+		log_error "Invalid SHA256 format: $expected_checksum"
+		exit 1
+	fi
+
+	computed_checksum="$(sha256_file "$installer_path" | tr '[:upper:]' '[:lower:]')"
+	if [[ "$computed_checksum" != "$expected_checksum" ]]; then
+		log_error "Installer checksum mismatch. Expected: $expected_checksum, got: $computed_checksum"
+		exit 1
+	fi
+
+	log_info "Installer checksum verification passed."
+}
+
 installed_version() {
 	if command_exists rke2; then
 		rke2 --version 2>/dev/null | awk '{print $3}' || true
@@ -239,7 +327,7 @@ check_prerequisites() {
 }
 
 install_rke2() {
-	local role="$1" channel="$2" version="$3" force="$4" secure_install="$5"
+	local role="$1" channel="$2" version="$3" force="$4" secure_install="$5" installer_sha256="${6:-}" installer_sha256_url="${7:-}"
 
 	local current_ver
 	current_ver="$(installed_version)"
@@ -267,6 +355,9 @@ install_rke2() {
 		installer_tmp="$(mktemp)"
 		log_info "Downloading installer to temporary file: $installer_tmp"
 		curl -sfL "$RKE2_INSTALL_URL" -o "$installer_tmp"
+		if [[ -n "$installer_sha256" || -n "$installer_sha256_url" ]]; then
+			verify_downloaded_installer_checksum "$installer_tmp" "$installer_sha256" "$installer_sha256_url"
+		fi
 		chmod 700 "$installer_tmp"
 		# Always remove temporary installer file, even when execution fails.
 		trap 'rm -f "$installer_tmp"' RETURN
@@ -523,7 +614,7 @@ main() {
 	local cmd="$1"
 	shift
 
-	local role="" channel="stable" version="" config_path="" server_url="" token="" token_file="" cluster_init="false" auto_swapoff="false" force="" secure_install="false"
+	local role="" channel="stable" version="" config_path="" server_url="" token="" token_file="" cluster_init="false" auto_swapoff="false" force="" secure_install="false" installer_sha256="" installer_sha256_url=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -571,6 +662,14 @@ main() {
 			secure_install="true"
 			shift
 			;;
+		--installer-sha256)
+			installer_sha256="$2"
+			shift 2
+			;;
+		--installer-sha256-url)
+			installer_sha256_url="$2"
+			shift 2
+			;;
 		-h | --help)
 			print_usage
 			exit 0
@@ -593,6 +692,12 @@ main() {
 			exit 1
 		fi
 		validate_role "$role" || exit 1
+		if [[ -n "$installer_sha256" || -n "$installer_sha256_url" ]]; then
+			if [[ "$secure_install" != "true" ]]; then
+				log_warn "Checksum verification requested; enabling --secure-install automatically."
+				secure_install="true"
+			fi
+		fi
 
 		check_prerequisites "$role"
 
@@ -620,7 +725,7 @@ main() {
 			write_config_from_flags "$role" "$tok" "$server_url" "$cluster_init"
 		fi
 
-		install_rke2 "$role" "$channel" "$version" "$force" "$secure_install"
+		install_rke2 "$role" "$channel" "$version" "$force" "$secure_install" "$installer_sha256" "$installer_sha256_url"
 		enable_and_start "$role"
 		if [[ "$role" == "server" ]]; then
 			log_info "Kubeconfig: $RKE2_KUBECONFIG_FILE (set KUBECONFIG or copy to ~/.kube/config)"
