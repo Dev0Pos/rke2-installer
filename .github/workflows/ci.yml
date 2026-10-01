@@ -42,3 +42,6 @@ jobs:
 
       - name: Coverage gate (100%)
         run: ./scripts/check-coverage.sh
+
+      - name: Release artifact smoke test
+        run: ./scripts/build-release-artifacts.sh ci-smoke /tmp/rke2-dist

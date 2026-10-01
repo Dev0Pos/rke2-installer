@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for release artifacts (optional for manual runs)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure scripts are executable
+        run: chmod +x scripts/*.sh
+
+      - name: Build release artifacts
+        run: |
+          VERSION_INPUT="${{ github.event.inputs.version }}"
+          if [[ -n "$VERSION_INPUT" ]]; then
+            ./scripts/build-release-artifacts.sh "$VERSION_INPUT" dist
+          else
+            ./scripts/build-release-artifacts.sh "${GITHUB_REF_NAME}" dist
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

@@ -8,15 +8,16 @@ trap 'rm -rf "$TRACE_DIR"' EXIT
 
 PS4='+${BASH_SOURCE}:${LINENO}:' bash -x "$SCRIPT_DIR/test-installer.sh" >"$TRACE_DIR/installer.out" 2>"$TRACE_DIR/installer.trace"
 PS4='+${BASH_SOURCE}:${LINENO}:' bash -x "$SCRIPT_DIR/test-uninstaller.sh" >"$TRACE_DIR/uninstaller.out" 2>"$TRACE_DIR/uninstaller.trace"
+PS4='+${BASH_SOURCE}:${LINENO}:' bash -x "$SCRIPT_DIR/test-integration.sh" >"$TRACE_DIR/integration.out" 2>"$TRACE_DIR/integration.trace"
 
-python3 - "$SCRIPT_DIR/rke2-installer.sh" "$TRACE_DIR/installer.trace" "Installer" <<'PY'
+python3 - "$SCRIPT_DIR/rke2-installer.sh" "$TRACE_DIR/installer.trace" "$TRACE_DIR/integration.trace" "Installer" <<'PY'
 import os
 import re
 import sys
 
 target_path = os.path.realpath(sys.argv[1])
-trace_path = sys.argv[2]
-label = sys.argv[3]
+trace_paths = sys.argv[2:-1]
+label = sys.argv[-1]
 
 SKIP_TOKENS = {"{", "}", ";;", "esac", "do", "done", "then", "fi", "else", "in"}
 function_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
@@ -56,6 +57,8 @@ with open(target_path, "r", encoding="utf-8") as fh:
             continue
         if "} >" in stripped:
             continue
+        if stripped.startswith("done <"):
+            continue
         if stripped.startswith("log_error ") or stripped.startswith("exit "):
             continue
         if "is not installed." in stripped:
@@ -71,11 +74,12 @@ with open(target_path, "r", encoding="utf-8") as fh:
 
 trace_pattern = re.compile(r"^\++" + re.escape(target_path) + r":(\d+):")
 executed = set()
-with open(trace_path, "r", encoding="utf-8") as fh:
-    for line in fh:
-        m = trace_pattern.match(line)
-        if m:
-            executed.add(int(m.group(1)))
+for trace_path in trace_paths:
+    with open(trace_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = trace_pattern.match(line)
+            if m:
+                executed.add(int(m.group(1)))
 
 missing = sorted(coverable - executed)
 covered = len(coverable) - len(missing)
@@ -88,14 +92,14 @@ if missing:
     sys.exit(1)
 PY
 
-python3 - "$SCRIPT_DIR/rke2-uninstaller.sh" "$TRACE_DIR/uninstaller.trace" "Uninstaller" <<'PY'
+python3 - "$SCRIPT_DIR/rke2-uninstaller.sh" "$TRACE_DIR/uninstaller.trace" "$TRACE_DIR/integration.trace" "Uninstaller" <<'PY'
 import os
 import re
 import sys
 
 target_path = os.path.realpath(sys.argv[1])
-trace_path = sys.argv[2]
-label = sys.argv[3]
+trace_paths = sys.argv[2:-1]
+label = sys.argv[-1]
 
 SKIP_TOKENS = {"{", "}", ";;", "esac", "do", "done", "then", "fi", "else", "in"}
 function_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\(\)\s*\{$")
@@ -135,6 +139,8 @@ with open(target_path, "r", encoding="utf-8") as fh:
             continue
         if "} >" in stripped:
             continue
+        if stripped.startswith("done <"):
+            continue
         if stripped.startswith("log_error ") or stripped.startswith("exit "):
             continue
         if "is not installed." in stripped:
@@ -150,11 +156,12 @@ with open(target_path, "r", encoding="utf-8") as fh:
 
 trace_pattern = re.compile(r"^\++" + re.escape(target_path) + r":(\d+):")
 executed = set()
-with open(trace_path, "r", encoding="utf-8") as fh:
-    for line in fh:
-        m = trace_pattern.match(line)
-        if m:
-            executed.add(int(m.group(1)))
+for trace_path in trace_paths:
+    with open(trace_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = trace_pattern.match(line)
+            if m:
+                executed.add(int(m.group(1)))
 
 missing = sorted(coverable - executed)
 covered = len(coverable) - len(missing)
