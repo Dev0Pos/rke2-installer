@@ -21,7 +21,7 @@ jobs:
       - name: Install tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck kcov
+          sudo apt-get install -y shellcheck
           go install mvdan.cc/sh/v3/cmd/shfmt@latest
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 

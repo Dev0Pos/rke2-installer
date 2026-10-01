@@ -197,7 +197,7 @@ Run the test suite to validate the installer:
 ./scripts/test-all.sh
 ```
 
-Run 100% coverage verification (requires `kcov`):
+Run 100% coverage verification:
 ```bash
 ./scripts/check-coverage.sh
 ```
@@ -269,7 +269,7 @@ See `LICENSE` file.
 - `scripts/test-installer.sh` - Installer unit test suite
 - `scripts/test-uninstaller.sh` - Uninstaller unit test suite
 - `scripts/test-all.sh` - Unified test runner
-- `scripts/check-coverage.sh` - 100% coverage gate (kcov-based)
+- `scripts/check-coverage.sh` - 100% coverage gate (xtrace-based)
 
 **Examples:**
 - `examples/server-config.yaml` - Example server configuration
