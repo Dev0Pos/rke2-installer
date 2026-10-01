@@ -3,6 +3,16 @@
 set -euo pipefail
 
 PROGRAM_NAME="rke2-uninstaller"
+RKE2_CONFIG_DIR="${RKE2_CONFIG_DIR:-/etc/rancher/rke2}"
+RKE2_CONFIG_FILE="${RKE2_CONFIG_FILE:-$RKE2_CONFIG_DIR/config.yaml}"
+RKE2_KUBECONFIG_FILE="${RKE2_KUBECONFIG_FILE:-$RKE2_CONFIG_DIR/rke2.yaml}"
+RKE2_NODE_TOKEN_FILE="${RKE2_NODE_TOKEN_FILE:-/var/lib/rancher/rke2/server/node-token}"
+RKE2_SYSTEMD_UNIT_DIR="${RKE2_SYSTEMD_UNIT_DIR:-/usr/lib/systemd/system}"
+RKE2_SERVER_UNINSTALL_SCRIPT="${RKE2_SERVER_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-uninstall.sh}"
+RKE2_AGENT_UNINSTALL_SCRIPT="${RKE2_AGENT_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-agent-uninstall.sh}"
+RKE2_BINARY_PATH="${RKE2_BINARY_PATH:-/usr/bin/rke2}"
+RKE2_BACKUP_ROOT="${RKE2_BACKUP_ROOT:-/tmp}"
+RKE2_DATA_DIRS="${RKE2_DATA_DIRS:-/var/lib/rancher/rke2 /etc/rancher/rke2 /opt/rke2}"
 
 print_usage() {
   cat <<'EOF'
@@ -37,26 +47,34 @@ require_root() {
   fi
 }
 
+validate_role() {
+  local role="$1"
+  if [[ "$role" != "server" && "$role" != "agent" ]]; then
+    log_error "Invalid role: $role. Must be 'server' or 'agent'"
+    return 1
+  fi
+}
+
 detect_role() {
   local server_installed=false
   local agent_installed=false
   
-  if [[ -f "/usr/lib/systemd/system/rke2-server.service" ]]; then
+  if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" ]]; then
     server_installed=true
   fi
   
-  if [[ -f "/usr/lib/systemd/system/rke2-agent.service" ]]; then
+  if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service" ]]; then
     agent_installed=true
   fi
   
   if [[ "$server_installed" == "true" && "$agent_installed" == "true" ]]; then
-    echo ""
+    echo "both"
   elif [[ "$server_installed" == "true" ]]; then
     echo "server"
   elif [[ "$agent_installed" == "true" ]]; then
     echo "agent"
   else
-    echo ""
+    echo "none"
   fi
 }
 
@@ -66,6 +84,13 @@ is_service_running() {
   systemctl is-active --quiet "$svc" 2>/dev/null
 }
 
+read_space_separated_paths() {
+  local source_list="$1"
+  # shellcheck disable=SC2206
+  local paths=( $source_list )
+  printf '%s\n' "${paths[@]}"
+}
+
 create_backup() {
   local role="$1" backup_dir="$2"
   
@@ -73,26 +98,26 @@ create_backup() {
   mkdir -p "$backup_dir"
   
   # Backup config files
-  if [[ -f /etc/rancher/rke2/config.yaml ]]; then
-    cp /etc/rancher/rke2/config.yaml "$backup_dir/"
+  if [[ -f "$RKE2_CONFIG_FILE" ]]; then
+    cp "$RKE2_CONFIG_FILE" "$backup_dir/"
     log_info "✓ Backed up config.yaml"
   fi
   
   # Backup kubeconfig for server
-  if [[ "$role" == "server" && -f /etc/rancher/rke2/rke2.yaml ]]; then
-    cp /etc/rancher/rke2/rke2.yaml "$backup_dir/"
+  if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
+    cp "$RKE2_KUBECONFIG_FILE" "$backup_dir/"
     log_info "✓ Backed up rke2.yaml"
   fi
   
   # Backup token file if it exists
-  if [[ -f /var/lib/rancher/rke2/server/node-token ]]; then
-    cp /var/lib/rancher/rke2/server/node-token "$backup_dir/"
+  if [[ -f "$RKE2_NODE_TOKEN_FILE" ]]; then
+    cp "$RKE2_NODE_TOKEN_FILE" "$backup_dir/"
     log_info "✓ Backed up node-token"
   fi
   
   # Backup service files
-  if [[ -f /usr/lib/systemd/system/rke2-$role.service ]]; then
-    cp /usr/lib/systemd/system/rke2-$role.service "$backup_dir/"
+  if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" ]]; then
+    cp "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" "$backup_dir/"
     log_info "✓ Backed up service file"
   fi
   
@@ -104,26 +129,25 @@ clean_data_directories() {
   
   log_warn "Removing RKE2 data directories (this will delete all cluster data)..."
   
-  local dirs=("/var/lib/rancher/rke2" "/etc/rancher/rke2" "/opt/rke2")
-  for dir in "${dirs[@]}"; do
+  while IFS= read -r dir; do
     if [[ -d "$dir" ]]; then
       log_info "Removing $dir..."
       rm -rf "$dir"
     fi
-  done
+  done < <(read_space_separated_paths "$RKE2_DATA_DIRS")
   
   # Remove binaries
-  if [[ -f /usr/bin/rke2 ]]; then
+  if [[ -f "$RKE2_BINARY_PATH" ]]; then
     log_info "Removing RKE2 binary..."
-    rm -f /usr/bin/rke2
+    rm -f "$RKE2_BINARY_PATH"
   fi
   
   # Remove uninstall scripts
-  if [[ -f /usr/local/bin/rke2-uninstall.sh ]]; then
-    rm -f /usr/local/bin/rke2-uninstall.sh
+  if [[ -f "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]; then
+    rm -f "$RKE2_SERVER_UNINSTALL_SCRIPT"
   fi
-  if [[ -f /usr/local/bin/rke2-agent-uninstall.sh ]]; then
-    rm -f /usr/local/bin/rke2-agent-uninstall.sh
+  if [[ -f "$RKE2_AGENT_UNINSTALL_SCRIPT" ]]; then
+    rm -f "$RKE2_AGENT_UNINSTALL_SCRIPT"
   fi
   
   log_info "Data cleanup completed."
@@ -140,14 +164,14 @@ show_what_will_be_done() {
   echo
   
   echo "Files that would be backed up:"
-  if [[ -f /etc/rancher/rke2/config.yaml ]]; then
-    echo "  ✓ /etc/rancher/rke2/config.yaml"
+  if [[ -f "$RKE2_CONFIG_FILE" ]]; then
+    echo "  ✓ $RKE2_CONFIG_FILE"
   fi
-  if [[ "$role" == "server" && -f /etc/rancher/rke2/rke2.yaml ]]; then
-    echo "  ✓ /etc/rancher/rke2/rke2.yaml"
+  if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
+    echo "  ✓ $RKE2_KUBECONFIG_FILE"
   fi
-  if [[ -f /var/lib/rancher/rke2/server/node-token ]]; then
-    echo "  ✓ /var/lib/rancher/rke2/server/node-token"
+  if [[ -f "$RKE2_NODE_TOKEN_FILE" ]]; then
+    echo "  ✓ $RKE2_NODE_TOKEN_FILE"
   fi
   echo
   
@@ -157,10 +181,10 @@ show_what_will_be_done() {
   
   if [[ "$clean_data" == "true" ]]; then
     echo "Data directories that would be removed:"
-    echo "  - /var/lib/rancher/rke2"
-    echo "  - /etc/rancher/rke2"
-    echo "  - /opt/rke2"
-    echo "  - /usr/bin/rke2"
+    while IFS= read -r dir; do
+      echo "  - $dir"
+    done < <(read_space_separated_paths "$RKE2_DATA_DIRS")
+    echo "  - $RKE2_BINARY_PATH"
     echo
   fi
   
@@ -206,16 +230,16 @@ do_uninstall() {
   
   # Run official uninstall script
   if [[ "$role" == "server" ]]; then
-    if [[ -x /usr/local/bin/rke2-uninstall.sh ]]; then
+    if [[ -x "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]; then
       log_info "Running official RKE2 server uninstall script..."
-      /usr/local/bin/rke2-uninstall.sh
+      "$RKE2_SERVER_UNINSTALL_SCRIPT"
     else
       log_warn "Official uninstall script not found, performing manual cleanup..."
     fi
   else
-    if [[ -x /usr/local/bin/rke2-agent-uninstall.sh ]]; then
+    if [[ -x "$RKE2_AGENT_UNINSTALL_SCRIPT" ]]; then
       log_info "Running official RKE2 agent uninstall script..."
-      /usr/local/bin/rke2-agent-uninstall.sh
+      "$RKE2_AGENT_UNINSTALL_SCRIPT"
     else
       log_warn "Official uninstall script not found, performing manual cleanup..."
     fi
@@ -247,28 +271,38 @@ main() {
   
   # Auto-detect role if not specified
   if [[ -z "$role" ]]; then
-    role="$(detect_role)"
-    if [[ -z "$role" ]]; then
-      log_warn "Both server and agent are installed. Please specify --role server|agent"
-      log_error "Could not detect RKE2 role. Please specify --role server|agent"
-      exit 1
-    fi
-    log_info "Auto-detected role: $role"
+    local detected_role
+    detected_role="$(detect_role)"
+    case "$detected_role" in
+      server|agent)
+        role="$detected_role"
+        log_info "Auto-detected role: $role"
+        ;;
+      both)
+        log_error "Both server and agent are installed. Please specify --role server|agent"
+        exit 1
+        ;;
+      none)
+        log_error "Could not detect RKE2 role. No RKE2 installation found."
+        exit 1
+        ;;
+      *)
+        log_error "Unexpected role detection result: $detected_role"
+        exit 1
+        ;;
+    esac
   fi
   
   # Validate role
-  if [[ "$role" != "server" && "$role" != "agent" ]]; then
-    log_error "Invalid role: $role. Must be 'server' or 'agent'"
-    exit 1
-  fi
+  validate_role "$role" || exit 1
   
   # Set default backup directory
   if [[ -z "$backup_dir" ]]; then
-    backup_dir="/tmp/rke2-backup-$(date +%Y%m%d-%H%M%S)"
+    backup_dir="$RKE2_BACKUP_ROOT/rke2-backup-$(date +%Y%m%d-%H%M%S)"
   fi
   
   # Check if RKE2 is installed
-  if ! [[ -f "/usr/lib/systemd/system/rke2-$role.service" ]]; then
+  if ! [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" ]]; then
     log_error "RKE2 $role is not installed on this system."
     exit 1
   fi
@@ -282,13 +316,13 @@ main() {
   # Require root for actual uninstall
   require_root
   
-  # Create backup
-  create_backup "$role" "$backup_dir"
-  
   # Confirm unless --force is used
   if [[ "$force" != "true" ]]; then
     confirm_uninstall "$role" "$clean_data"
   fi
+
+  # Create backup only after final confirmation to avoid unnecessary files.
+  create_backup "$role" "$backup_dir"
   
   # Perform uninstall
   do_uninstall "$role" "$backup_dir" "$clean_data"
@@ -296,4 +330,6 @@ main() {
   log_info "Uninstall completed successfully!"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

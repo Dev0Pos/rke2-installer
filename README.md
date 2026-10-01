@@ -25,6 +25,7 @@ Optional: disabled swap (script can do this automatically with `--auto-swapoff` 
 - ✅ Token handling (direct or file-based)
 - ✅ Version and channel specification
 - ✅ Force reinstall option
+- ✅ Optional secure installer mode (`--secure-install`, no pipe-to-shell)
 - ✅ Dedicated uninstaller with dry-run mode
 - ✅ Comprehensive test suite
 - ✅ Automatic role detection
@@ -34,6 +35,8 @@ Optional: disabled swap (script can do this automatically with `--auto-swapoff` 
 1) Server (first node):
 ```bash
 sudo ./scripts/rke2-installer.sh install --role server --cluster-init
+# Safer mode (downloads installer script before execution)
+sudo ./scripts/rke2-installer.sh install --role server --cluster-init --secure-install
 ```
 
 2) Agent:
@@ -191,7 +194,12 @@ sudo rm -rf /opt/rke2
 ### Testing
 Run the test suite to validate the installer:
 ```bash
-./scripts/test-installer.sh
+./scripts/test-all.sh
+```
+
+Run 100% coverage verification (requires `kcov`):
+```bash
+./scripts/check-coverage.sh
 ```
 
 ### Troubleshooting CNI Issues
@@ -258,7 +266,10 @@ See `LICENSE` file.
 **Scripts:**
 - `scripts/rke2-installer.sh` - Main installer script
 - `scripts/rke2-uninstaller.sh` - Dedicated uninstaller script
-- `scripts/test-installer.sh` - Test suite for validation
+- `scripts/test-installer.sh` - Installer unit test suite
+- `scripts/test-uninstaller.sh` - Uninstaller unit test suite
+- `scripts/test-all.sh` - Unified test runner
+- `scripts/check-coverage.sh` - 100% coverage gate (kcov-based)
 
 **Examples:**
 - `examples/server-config.yaml` - Example server configuration

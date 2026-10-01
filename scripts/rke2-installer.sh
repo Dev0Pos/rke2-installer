@@ -3,6 +3,18 @@
 set -euo pipefail
 
 PROGRAM_NAME="rke2-installer"
+RKE2_CONFIG_DIR="${RKE2_CONFIG_DIR:-/etc/rancher/rke2}"
+RKE2_CONFIG_FILE="${RKE2_CONFIG_FILE:-$RKE2_CONFIG_DIR/config.yaml}"
+RKE2_KUBECONFIG_FILE="${RKE2_KUBECONFIG_FILE:-$RKE2_CONFIG_DIR/rke2.yaml}"
+RKE2_NODE_TOKEN_FILE="${RKE2_NODE_TOKEN_FILE:-/var/lib/rancher/rke2/server/node-token}"
+RKE2_SYSTEMD_UNIT_DIR="${RKE2_SYSTEMD_UNIT_DIR:-/usr/lib/systemd/system}"
+RKE2_SERVER_UNINSTALL_SCRIPT="${RKE2_SERVER_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-uninstall.sh}"
+RKE2_AGENT_UNINSTALL_SCRIPT="${RKE2_AGENT_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-agent-uninstall.sh}"
+RKE2_FSTAB_FILE="${RKE2_FSTAB_FILE:-/etc/fstab}"
+RKE2_INSTALL_URL="${RKE2_INSTALL_URL:-https://get.rke2.io}"
+RKE2_BACKUP_ROOT="${RKE2_BACKUP_ROOT:-/tmp}"
+RKE2_DATA_DIRS="${RKE2_DATA_DIRS:-/var/lib/rancher/rke2 /etc/rancher/rke2 /opt/rke2}"
+RKE2_LOG_FILES="${RKE2_LOG_FILES:-/var/log/rke2.log /var/log/rke2-server.log /var/log/rke2-agent.log}"
 
 print_usage() {
   cat <<'EOF'
@@ -25,6 +37,7 @@ Installation options:
   --cluster-init           Initialize cluster (first server)
   --auto-swapoff           Automatically disable swap if active
   --force                  Force reinstall/upgrade even if already installed
+  --secure-install         Download installer before execution (no pipe-to-shell)
 
 Examples:
   ./scripts/rke2-installer.sh install --role server --cluster-init
@@ -48,6 +61,14 @@ require_root() {
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
+}
+
+validate_role() {
+  local role="$1"
+  if [[ "$role" != "server" && "$role" != "agent" ]]; then
+    log_error "Invalid role: $role. Must be 'server' or 'agent'"
+    return 1
+  fi
 }
 
 validate_system() {
@@ -92,22 +113,22 @@ disable_swap() {
   if is_swap_on; then
     log_info "Disabling swap (temporarily)..."
     swapoff -a || true
-    if [[ -f /etc/fstab ]]; then
-      log_info "Commenting swap entries in /etc/fstab (idempotently)."
-      cp /etc/fstab /etc/fstab.backup.$(date +%s)
-      sed -i 's/^\(.*\sswap\s\+\w\+.*\)$/# \1/g' /etc/fstab || true
+    if [[ -f "$RKE2_FSTAB_FILE" ]]; then
+      log_info "Commenting swap entries in $RKE2_FSTAB_FILE (idempotently)."
+      cp "$RKE2_FSTAB_FILE" "$RKE2_FSTAB_FILE.backup.$(date +%s)"
+      sed -i 's/^\(.*\sswap\s\+\w\+.*\)$/# \1/g' "$RKE2_FSTAB_FILE" || true
     fi
   fi
 }
 
 ensure_config_dir() {
-  mkdir -p /etc/rancher/rke2
+  mkdir -p "$RKE2_CONFIG_DIR"
 }
 
 write_config_from_flags() {
   local role="$1" token="$2" server_url="$3" cluster_init="$4"
   ensure_config_dir
-  local cfg="/etc/rancher/rke2/config.yaml"
+  local cfg="$RKE2_CONFIG_FILE"
 
   if [[ -f "$cfg" ]]; then
     log_warn "File $cfg already exists – not overwriting."
@@ -141,8 +162,8 @@ copy_config_if_provided() {
       exit 1
     fi
     ensure_config_dir
-    cp "$config_path" /etc/rancher/rke2/config.yaml
-    log_info "Copied config to /etc/rancher/rke2/config.yaml"
+    cp "$config_path" "$RKE2_CONFIG_FILE"
+    log_info "Copied config to $RKE2_CONFIG_FILE"
   fi
 }
 
@@ -163,6 +184,13 @@ read_token() {
   echo ""
 }
 
+read_space_separated_paths() {
+  local source_list="$1"
+  # shellcheck disable=SC2206
+  local paths=( $source_list )
+  printf '%s\n' "${paths[@]}"
+}
+
 installed_version() {
   if command_exists rke2; then
     rke2 --version 2>/dev/null | awk '{print $3}' || true
@@ -179,6 +207,7 @@ is_service_running() {
 
 check_prerequisites() {
   local role="$1"
+  validate_role "$role" || exit 1
   
   # Check if RKE2 is already running
   if is_service_running "$role"; then
@@ -207,7 +236,7 @@ check_prerequisites() {
 }
 
 install_rke2() {
-  local role="$1" channel="$2" version="$3" force="$4"
+  local role="$1" channel="$2" version="$3" force="$4" secure_install="$5"
 
   local current_ver
   current_ver="$(installed_version)"
@@ -227,7 +256,20 @@ install_rke2() {
   esac
 
   log_info "Installing RKE2 (channel=$channel version=${version:-n/a} role=$role)..."
-  curl -sfL https://get.rke2.io | sh -
+  if [[ "$secure_install" == "true" ]]; then
+    local installer_tmp
+    installer_tmp="$(mktemp)"
+    log_info "Downloading installer to temporary file: $installer_tmp"
+    curl -sfL "$RKE2_INSTALL_URL" -o "$installer_tmp"
+    chmod 700 "$installer_tmp"
+    # Always remove temporary installer file, even when execution fails.
+    trap 'rm -f "$installer_tmp"' RETURN
+    sh "$installer_tmp"
+    rm -f "$installer_tmp"
+    trap - RETURN
+  else
+    curl -sfL "$RKE2_INSTALL_URL" | sh -
+  fi
 }
 
 enable_and_start() {
@@ -306,7 +348,7 @@ show_status() {
   echo
   
   # Check if service exists
-  if ! [[ -f "/usr/lib/systemd/system/$svc.service" ]]; then
+  if ! [[ -f "$RKE2_SYSTEMD_UNIT_DIR/$svc.service" ]]; then
     echo "Service $svc is not installed."
     return 1
   fi
@@ -324,18 +366,18 @@ show_status() {
   fi
   
   # Show config file info
-  if [[ -f /etc/rancher/rke2/config.yaml ]]; then
-    echo "Configuration file: /etc/rancher/rke2/config.yaml"
-    echo "Config file size: $(stat -c%s /etc/rancher/rke2/config.yaml) bytes"
+  if [[ -f "$RKE2_CONFIG_FILE" ]]; then
+    echo "Configuration file: $RKE2_CONFIG_FILE"
+    echo "Config file size: $(stat -c%s "$RKE2_CONFIG_FILE") bytes"
   else
-    echo "No configuration file found at /etc/rancher/rke2/config.yaml"
+    echo "No configuration file found at $RKE2_CONFIG_FILE"
   fi
   echo
   
   # Show kubeconfig info for server
-  if [[ "$role" == "server" && -f /etc/rancher/rke2/rke2.yaml ]]; then
-    echo "Kubeconfig: /etc/rancher/rke2/rke2.yaml"
-    echo "Kubeconfig size: $(stat -c%s /etc/rancher/rke2/rke2.yaml) bytes"
+  if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
+    echo "Kubeconfig: $RKE2_KUBECONFIG_FILE"
+    echo "Kubeconfig size: $(stat -c%s "$RKE2_KUBECONFIG_FILE") bytes"
   fi
 }
 
@@ -379,10 +421,10 @@ show_info() {
   
   # Configuration information
   echo "Configuration:"
-  if [[ -f /etc/rancher/rke2/config.yaml ]]; then
-    echo "  Config file: /etc/rancher/rke2/config.yaml"
-    echo "  Config size: $(stat -c%s /etc/rancher/rke2/config.yaml) bytes"
-    echo "  Config modified: $(stat -c%y /etc/rancher/rke2/config.yaml)"
+  if [[ -f "$RKE2_CONFIG_FILE" ]]; then
+    echo "  Config file: $RKE2_CONFIG_FILE"
+    echo "  Config size: $(stat -c%s "$RKE2_CONFIG_FILE") bytes"
+    echo "  Config modified: $(stat -c%y "$RKE2_CONFIG_FILE")"
   else
     echo "  Config file: Not found"
   fi
@@ -390,14 +432,13 @@ show_info() {
   
   # Data directories
   echo "Data Directories:"
-  local data_dirs=("/var/lib/rancher/rke2" "/etc/rancher/rke2" "/opt/rke2")
-  for dir in "${data_dirs[@]}"; do
+  while IFS= read -r dir; do
     if [[ -d "$dir" ]]; then
       echo "  $dir: $(du -sh "$dir" 2>/dev/null | awk '{print $1}')"
     else
       echo "  $dir: Not found"
     fi
-  done
+  done < <(read_space_separated_paths "$RKE2_DATA_DIRS")
   echo
   
   # Network information
@@ -411,37 +452,36 @@ show_info() {
   
   # Log files
   echo "Log Files:"
-  local log_files=("/var/log/rke2.log" "/var/log/rke2-server.log" "/var/log/rke2-agent.log")
-  for log_file in "${log_files[@]}"; do
+  while IFS= read -r log_file; do
     if [[ -f "$log_file" ]]; then
       echo "  $log_file: $(stat -c%s "$log_file") bytes"
     fi
-  done
+  done < <(read_space_separated_paths "$RKE2_LOG_FILES")
 }
 
 do_uninstall() {
   local role="$1"
   
   # Create backup before uninstalling
-  local backup_dir="/tmp/rke2-backup-$(date +%Y%m%d-%H%M%S)"
+  local backup_dir="$RKE2_BACKUP_ROOT/rke2-backup-$(date +%Y%m%d-%H%M%S)"
   log_info "Creating backup in $backup_dir before uninstalling..."
   mkdir -p "$backup_dir"
   
   # Backup config files
-  if [[ -f /etc/rancher/rke2/config.yaml ]]; then
-    cp /etc/rancher/rke2/config.yaml "$backup_dir/"
+  if [[ -f "$RKE2_CONFIG_FILE" ]]; then
+    cp "$RKE2_CONFIG_FILE" "$backup_dir/"
     log_info "Backed up config.yaml"
   fi
   
   # Backup kubeconfig for server
-  if [[ "$role" == "server" && -f /etc/rancher/rke2/rke2.yaml ]]; then
-    cp /etc/rancher/rke2/rke2.yaml "$backup_dir/"
+  if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
+    cp "$RKE2_KUBECONFIG_FILE" "$backup_dir/"
     log_info "Backed up rke2.yaml"
   fi
   
   # Backup token file if it exists
-  if [[ -f /var/lib/rancher/rke2/server/node-token ]]; then
-    cp /var/lib/rancher/rke2/server/node-token "$backup_dir/"
+  if [[ -f "$RKE2_NODE_TOKEN_FILE" ]]; then
+    cp "$RKE2_NODE_TOKEN_FILE" "$backup_dir/"
     log_info "Backed up node-token"
   fi
   
@@ -449,18 +489,18 @@ do_uninstall() {
   
   # Perform uninstall
   if [[ "$role" == "server" ]]; then
-    if [[ -x /usr/local/bin/rke2-uninstall.sh ]]; then
+    if [[ -x "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]; then
       log_info "Running RKE2 server uninstall script..."
-      /usr/local/bin/rke2-uninstall.sh
+      "$RKE2_SERVER_UNINSTALL_SCRIPT"
     else
-      log_warn "Missing /usr/local/bin/rke2-uninstall.sh – looks like RKE2 server is not installed."
+      log_warn "Missing $RKE2_SERVER_UNINSTALL_SCRIPT – looks like RKE2 server is not installed."
     fi
   else
-    if [[ -x /usr/local/bin/rke2-agent-uninstall.sh ]]; then
+    if [[ -x "$RKE2_AGENT_UNINSTALL_SCRIPT" ]]; then
       log_info "Running RKE2 agent uninstall script..."
-      /usr/local/bin/rke2-agent-uninstall.sh
+      "$RKE2_AGENT_UNINSTALL_SCRIPT"
     else
-      log_warn "Missing /usr/local/bin/rke2-agent-uninstall.sh – looks like RKE2 agent is not installed."
+      log_warn "Missing $RKE2_AGENT_UNINSTALL_SCRIPT – looks like RKE2 agent is not installed."
     fi
   fi
   
@@ -474,7 +514,7 @@ main() {
 
   local cmd="$1"; shift
 
-  local role="" channel="stable" version="" config_path="" server_url="" token="" token_file="" cluster_init="false" auto_swapoff="false" force=""
+  local role="" channel="stable" version="" config_path="" server_url="" token="" token_file="" cluster_init="false" auto_swapoff="false" force="" secure_install="false"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -488,6 +528,7 @@ main() {
       --cluster-init) cluster_init="true"; shift;;
       --auto-swapoff) auto_swapoff="true"; shift;;
       --force) force="true"; shift;;
+      --secure-install) secure_install="true"; shift;;
       -h|--help) print_usage; exit 0;;
       *) log_error "Unknown flag: $1"; print_usage; exit 1;;
     esac
@@ -502,6 +543,7 @@ main() {
         log_error "Provide --role server|agent"
         exit 1
       fi
+      validate_role "$role" || exit 1
       
       check_prerequisites "$role"
       
@@ -529,10 +571,10 @@ main() {
         write_config_from_flags "$role" "$tok" "$server_url" "$cluster_init"
       fi
 
-      install_rke2 "$role" "$channel" "$version" "$force"
+      install_rke2 "$role" "$channel" "$version" "$force" "$secure_install"
       enable_and_start "$role"
       if [[ "$role" == "server" ]]; then
-        log_info "Kubeconfig: /etc/rancher/rke2/rke2.yaml (set KUBECONFIG or copy to ~/.kube/config)"
+        log_info "Kubeconfig: $RKE2_KUBECONFIG_FILE (set KUBECONFIG or copy to ~/.kube/config)"
       fi
       ;;
     uninstall)
@@ -541,6 +583,7 @@ main() {
         log_error "Provide --role server|agent"
         exit 1
       fi
+      validate_role "$role" || exit 1
       do_uninstall "$role"
       ;;
     status)
@@ -548,6 +591,7 @@ main() {
         log_error "Provide --role server|agent"
         exit 1
       fi
+      validate_role "$role" || exit 1
       show_status "$role"
       ;;
     info)
@@ -555,6 +599,7 @@ main() {
         log_error "Provide --role server|agent"
         exit 1
       fi
+      validate_role "$role" || exit 1
       show_info "$role"
       ;;
           *)
@@ -565,6 +610,8 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
 
 
