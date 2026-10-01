@@ -192,6 +192,13 @@ test_install_and_enable_start() {
 	[[ "${INSTALL_RKE2_TYPE:-}" == "server" ]]
 	[[ "${INSTALL_RKE2_CHANNEL:-}" == "stable" ]]
 
+	local checksum_invocation_file="$TEST_ROOT/checksum-invocation"
+	verify_downloaded_installer_checksum() {
+		echo "$1|$2|$3" >"$checksum_invocation_file"
+	}
+	install_rke2 server stable "" "true" "true" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ""
+	assert_contains "$(cat "$checksum_invocation_file")" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
 	install_rke2 agent latest v1.2.3 "true" "true"
 	[[ "$(cat "$curl_mode_file")" == "secure" ]]
 	[[ "${INSTALL_RKE2_TYPE:-}" == "agent" ]]
@@ -379,6 +386,43 @@ test_additional_error_paths_for_coverage() {
 	rke2() { echo "rke2 version v1.2.3"; }
 	[[ "$(installed_version)" == "v1.2.3" ]]
 
+	local checksum_payload="$TEST_ROOT/payload.sh"
+	echo "echo payload" >"$checksum_payload"
+	local expected_sha
+	expected_sha="$(sha256sum "$checksum_payload" | awk '{print $1}')"
+	is_valid_sha256 "$expected_sha"
+	if is_valid_sha256 "invalid-sha"; then
+		teardown_installer_test_env
+		return 1
+	fi
+	[[ "$(sha256_file "$checksum_payload")" == "$expected_sha" ]]
+
+	local checksum_manifest="$TEST_ROOT/checksums.txt"
+	cat >"$checksum_manifest" <<EOF
+not-a-hash line
+$expected_sha  payload.sh
+EOF
+	[[ "$(extract_checksum_from_file "$checksum_manifest" "$checksum_payload" "$RKE2_INSTALL_URL")" == "$expected_sha" ]]
+	if extract_checksum_from_file "$TEST_ROOT/empty-checksums.txt" "$checksum_payload" "$RKE2_INSTALL_URL" >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	command_exists() { [[ "$1" == "sha256sum" ]]; }
+	curl() {
+		if [[ "$1" == "-sfL" && "$3" == "-o" ]]; then
+			cp "$2" "$4"
+			return 0
+		fi
+		return 1
+	}
+	verify_downloaded_installer_checksum "$checksum_payload" "$expected_sha" ""
+	verify_downloaded_installer_checksum "$checksum_payload" "" "$checksum_manifest"
+	if (verify_downloaded_installer_checksum "$checksum_payload" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "" >/tmp/installer-test.err 2>&1); then
+		teardown_installer_test_env
+		return 1
+	fi
+
 	systemctl() { return 0; }
 	is_service_running server
 	systemctl() { return 1; }
@@ -482,6 +526,18 @@ test_additional_error_paths_for_coverage() {
 
 	touch "$TEST_ROOT/config.yaml" "$TEST_ROOT/token.txt"
 	main install --role server --channel custom --version v1.2.3 --config "$TEST_ROOT/config.yaml" --server-url https://srv --token x --token-file "$TEST_ROOT/token.txt" --cluster-init --auto-swapoff --force --secure-install
+	local checksum_arg
+	checksum_arg="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	local checksum_url
+	checksum_url="$TEST_ROOT/checksum-url.txt"
+	echo "$checksum_arg  installer.sh" >"$checksum_url"
+	install_rke2() {
+		[[ "$5" == "true" ]]
+		[[ "$6" == "$checksum_arg" ]]
+		[[ "$7" == "$checksum_url" ]]
+	}
+	checksum_enable_output="$(main install --role server --installer-sha256 "$checksum_arg" --installer-sha256-url "$checksum_url" 2>&1)"
+	assert_contains "$checksum_enable_output" "enabling --secure-install automatically"
 	is_swap_on() { return 0; }
 	main install --role server
 	read_token() { echo ""; }

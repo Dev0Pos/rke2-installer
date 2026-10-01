@@ -145,8 +145,8 @@ EOF
 
 	MOCK_INSTALLER_SCRIPT="$TEST_ROOT/mock-rke2-installer.sh"
 	cat >"$MOCK_INSTALLER_SCRIPT" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 : "${INSTALL_RKE2_TYPE:?}"
 : "${MOCK_STATE_DIR:?}"
 : "${RKE2_SYSTEMD_UNIT_DIR:?}"
@@ -156,13 +156,13 @@ mkdir -p "$RKE2_SYSTEMD_UNIT_DIR" "$(dirname "$RKE2_SERVER_UNINSTALL_SCRIPT")" "
 touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-${INSTALL_RKE2_TYPE}.service"
 touch "${MOCK_STATE_DIR}/rke2-installed"
 cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 echo "server-uninstall" >> "${MOCK_STATE_DIR}/uninstall.log"
 EOS
 cat >"$RKE2_AGENT_UNINSTALL_SCRIPT" <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 echo "agent-uninstall" >> "${MOCK_STATE_DIR}/uninstall.log"
 EOS
 chmod +x "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT"
@@ -207,7 +207,7 @@ test_checksum_url_and_lifecycle() {
 	echo "secure-token" >"$TEST_ROOT/token.txt"
 
 	"$INSTALLER_SCRIPT" install --role server --cluster-init --secure-install --installer-sha256-url "$MOCK_CHECKSUM_URL"
-	"$INSTALLER_SCRIPT" install --role agent --server-url "https://server.example:9345" --token-file "$TEST_ROOT/token.txt" --secure-install --installer-sha256-url "$MOCK_CHECKSUM_URL"
+	"$INSTALLER_SCRIPT" install --role agent --server-url "https://server.example:9345" --token-file "$TEST_ROOT/token.txt" --secure-install --installer-sha256-url "$MOCK_CHECKSUM_URL" --force
 
 	local status_output info_output
 	status_output="$("$INSTALLER_SCRIPT" status --role server)"

@@ -218,6 +218,7 @@ sha256_file() {
 extract_checksum_from_file() {
 	local checksum_file="$1"
 	local expected_name="$2"
+	local expected_alt_name="${3:-}"
 	local line hash maybe_name
 
 	while IFS= read -r line; do
@@ -228,7 +229,7 @@ extract_checksum_from_file() {
 
 		maybe_name="$(awk '{print $2}' <<<"$line" 2>/dev/null || true)"
 		maybe_name="${maybe_name#\*}"
-		if [[ -z "$maybe_name" || "$maybe_name" == "$(basename "$expected_name")" || "$maybe_name" == "$expected_name" ]]; then
+		if [[ -z "$maybe_name" || "$maybe_name" == "$(basename "$expected_name")" || "$maybe_name" == "$expected_name" || "$maybe_name" == "$(basename "$expected_alt_name")" || "$maybe_name" == "$expected_alt_name" ]]; then
 			echo "$hash"
 			return 0
 		fi
@@ -250,7 +251,7 @@ verify_downloaded_installer_checksum() {
 	if [[ -n "$checksum_url" ]]; then
 		checksum_file="$(mktemp)"
 		curl -sfL "$checksum_url" -o "$checksum_file"
-		expected_checksum="$(extract_checksum_from_file "$checksum_file" "$installer_path" || true)"
+		expected_checksum="$(extract_checksum_from_file "$checksum_file" "$installer_path" "$RKE2_INSTALL_URL" || true)"
 		rm -f "$checksum_file"
 
 		if [[ -z "$expected_checksum" ]]; then

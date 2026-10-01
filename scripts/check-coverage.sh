@@ -57,6 +57,8 @@ with open(target_path, "r", encoding="utf-8") as fh:
             continue
         if "} >" in stripped:
             continue
+        if stripped.startswith("done <"):
+            continue
         if stripped.startswith("log_error ") or stripped.startswith("exit "):
             continue
         if "is not installed." in stripped:
@@ -136,6 +138,8 @@ with open(target_path, "r", encoding="utf-8") as fh:
         if stripped.startswith("return "):
             continue
         if "} >" in stripped:
+            continue
+        if stripped.startswith("done <"):
             continue
         if stripped.startswith("log_error ") or stripped.startswith("exit "):
             continue
