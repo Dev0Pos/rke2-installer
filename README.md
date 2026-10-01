@@ -1,39 +1,14 @@
 # rke2-installer
 
-Bash-based RKE2 installer with server/agent modes, basic validation, idempotency, and uninstall support.
+Minimal Bash toolkit to install, manage, and uninstall RKE2 nodes (`server` / `agent`).
 
-### Requirements
+## Requirements
 - Linux with `systemd`
-- `root` user (or `sudo`)
-- Internet access (script uses official `get.rke2.io`)
-- `curl` command available
-- Supported architectures: x86_64, amd64, aarch64, arm64
-- Minimum 1GB disk space
-- Minimum 512MB RAM
+- `root` or `sudo`
+- `curl`
+- Internet access to `get.rke2.io`
 
-Optional: disabled swap (script can do this automatically with `--auto-swapoff` flag).
-
-### Features
-- ✅ Server and agent installation modes
-- ✅ Configuration file support with examples
-- ✅ Idempotent operations (safe to run multiple times)
-- ✅ System validation and prerequisites checking
-- ✅ Automatic swap management
-- ✅ Service retry logic with detailed error reporting
-- ✅ Backup creation before uninstall
-- ✅ Detailed status and information commands
-- ✅ Token handling (direct or file-based)
-- ✅ Version and channel specification
-- ✅ Force reinstall option
-- ✅ Optional secure installer mode (`--secure-install`, no pipe-to-shell)
-- ✅ Installer checksum verification (`--installer-sha256` / `--installer-sha256-url`)
-- ✅ Dedicated uninstaller with dry-run mode
-- ✅ Comprehensive test suite
-- ✅ Automatic role detection
-- ✅ Enhanced error handling and logging
-- ✅ Automated release artifacts and release notes
-
-### Quick start
+## Quick start
 1) Server (first node):
 ```bash
 sudo ./scripts/rke2-installer.sh install --role server --cluster-init
@@ -53,248 +28,64 @@ sudo ./scripts/rke2-installer.sh install \
   --token <token>
 ```
 
-### Getting server address and token
-
-**Server Address:**
-- Use the IP address or hostname of your RKE2 server node
-- Default port is 9345 (e.g., `https://192.168.1.100:9345`)
-
-**Token:**
-- Get the token from the first server node:
+Get token from first server:
 ```bash
-# On the RKE2 server node
 cat /var/lib/rancher/rke2/server/node-token
 ```
-- Or use the token file directly:
+
+## Secure install (recommended)
+```bash
+sudo ./scripts/rke2-installer.sh install --role server --cluster-init --secure-install
+```
+
+With explicit checksum:
 ```bash
 sudo ./scripts/rke2-installer.sh install \
-  --role agent \
-  --server-url https://server.example.com:9345 \
-  --token-file /var/lib/rancher/rke2/server/node-token
+  --role server \
+  --cluster-init \
+  --secure-install \
+  --installer-sha256 <sha256>
 ```
 
-### Configuration
-You can pass a ready-made `config.yaml` file:
+With checksum file URL:
 ```bash
-sudo ./scripts/rke2-installer.sh install --role server --config ./examples/server-config.yaml
-```
-If you don't provide `--config`, the script will generate a minimal `/etc/rancher/rke2/config.yaml` based on flags.
-
-Configuration examples are in the `examples/` directory:
-- `examples/server-config.yaml` - Basic server configuration
-- `examples/agent-config.yaml` - Agent configuration
-- `examples/server-config-extended-tokens.yaml` - Server config with extended CNI token expiration (7 days)
-
-### CNI Configuration and Token Issues
-RKE2 uses **Canal** (Flannel + Calico) as the default CNI. A common issue is **expired CNI tokens** that cause network policy failures.
-
-**Problem:** CNI tokens expire every 24 hours, causing:
-- Failed pod creation: `plugin type="calico" failed: connection is unauthorized`
-- Network policy failures
-- Pod sandbox creation errors
-
-**Solutions:**
-
-1. **Temporary fix (restart Canal pods):**
-```bash
-# Restart Canal to regenerate tokens
-kubectl rollout restart daemonset/rke2-canal -n kube-system
-
-# Wait for pods to be ready
-kubectl get pods -n kube-system -l k8s-app=canal -w
+sudo ./scripts/rke2-installer.sh install \
+  --role server \
+  --cluster-init \
+  --secure-install \
+  --installer-sha256-url <checksum-url>
 ```
 
-2. **Permanent fix (extend token expiration to 7 business days):**
+## Useful commands
 ```bash
-# Edit RKE2 config
-sudo nano /etc/rancher/rke2/config.yaml
-
-# Add these lines:
-kube-apiserver-arg:
-  - "service-account-max-token-expiration=168h"  # 7 days
-  - "service-account-extend-token-expiration=true"
-
-# Restart RKE2 server
-sudo systemctl restart rke2-server
-
-# Verify token expiration
-kubectl get serviceaccount -n kube-system canal -o yaml | grep -A 5 -B 5 "token"
-```
-
-3. **Verify CNI is working:**
-```bash
-# Check Canal pods status
-kubectl get pods -n kube-system -l k8s-app=canal
-
-# Check for token errors in logs
-kubectl logs -n kube-system -l k8s-app=canal -c calico-node | grep -i "unauthorized\|forbidden"
-
-# Test network connectivity
-kubectl run test-pod --image=busybox --rm -it --restart=Never -- nslookup kubernetes.default
-```
-
-### Update / force version
-By default, the `stable` channel is used. You can specify a version or channel:
-```bash
-sudo ./scripts/rke2-installer.sh install --role server --channel stable --version v1.30.4+rke2r1
-```
-Use `--force` to force reinstall/upgrade even if RKE2 is already present.
-
-### Service status and information
-```bash
-# Basic status
+# status / info
 ./scripts/rke2-installer.sh status --role server
-
-# Detailed information
 ./scripts/rke2-installer.sh info --role server
-```
 
-### Uninstall
-
-**Using the dedicated uninstaller (recommended):**
-```bash
-# Auto-detect role and uninstall with confirmation
-sudo ./scripts/rke2-uninstaller.sh
-
-# Uninstall specific role with force (no confirmation)
+# uninstall helper
 sudo ./scripts/rke2-uninstaller.sh --role server --force
-
-# Dry run to see what would be done
 ./scripts/rke2-uninstaller.sh --dry-run
-
-# Uninstall and clean all data (WARNING: irreversible)
-sudo ./scripts/rke2-uninstaller.sh --clean-data
 ```
 
-**Using the main installer script:**
-```bash
-sudo ./scripts/rke2-installer.sh uninstall --role server
-sudo ./scripts/rke2-installer.sh uninstall --role agent
-```
+## Configuration
+- Use `--config <path>` to pass your own `config.yaml`
+- Ready examples:
+  - `examples/server-config.yaml`
+  - `examples/agent-config.yaml`
+  - `examples/server-config-extended-tokens.yaml`
 
-**Complete cluster removal:**
-To remove an entire RKE2 cluster, you need to uninstall on all nodes:
-
-1. **Uninstall all agent nodes first:**
-```bash
-# On each agent node
-sudo ./scripts/rke2-uninstaller.sh --role agent --force
-```
-
-2. **Uninstall all server nodes:**
-```bash
-# On each server node (start with non-leader nodes)
-sudo ./scripts/rke2-uninstaller.sh --role server --force
-```
-
-3. **Clean up persistent data (optional):**
-```bash
-# Remove RKE2 data directories (WARNING: this deletes all cluster data)
-sudo rm -rf /var/lib/rancher/rke2
-sudo rm -rf /etc/rancher/rke2
-sudo rm -rf /opt/rke2
-```
-
-**Note:** Always backup important data before cluster removal. Both uninstallers create automatic backups in `/tmp/rke2-backup-*`.
-
-### Testing
-Run the test suite to validate the installer:
+## Quality checks
 ```bash
 ./scripts/test-all.sh
-```
-
-Run 100% coverage verification:
-```bash
 ./scripts/check-coverage.sh
 ```
 
-### Release artifacts
-Build release package locally:
+## Release artifacts
 ```bash
 ./scripts/build-release-artifacts.sh vX.Y.Z
 ```
 
-The repository also publishes release artifacts automatically for tags matching `v*`.
+Tag `v*` triggers automatic GitHub release with artifact + SHA256.
 
-### Troubleshooting CNI Issues
-If you experience network problems after deployment:
-
-**Symptoms:**
-- Pods fail to start with `FailedCreatePodSandBox` errors
-- Network policies not working
-- Calico logs show `connection is unauthorized`
-
-**Quick diagnosis:**
-```bash
-# Check if Canal pods are running
-kubectl get pods -n kube-system -l k8s-app=canal
-
-# Check for token expiration errors
-kubectl logs -n kube-system -l k8s-app=canal -c calico-node --tail=50 | grep -i "unauthorized\|forbidden\|expir"
-
-# Check CNI configuration
-ls -la /etc/cni/net.d/
-cat /etc/cni/net.d/10-canal.conflist
-```
-
-**Immediate fix:**
-```bash
-# Restart Canal pods to regenerate tokens
-kubectl rollout restart daemonset/rke2-canal -n kube-system
-
-# Monitor restart
-kubectl get pods -n kube-system -l k8s-app=canal -w
-```
-
-**Prevention:**
-- Use the permanent token expiration fix above
-- Monitor Canal pod logs for early warning signs
-- Set up alerts for pod creation failures
-
-
-
-**Test Results:**
-The installer has been thoroughly tested and validated:
-- ✅ **25/25 tests passed** - All functionality verified
-- ✅ **Installer tests**: Syntax, functions, help, validation (6/6)
-- ✅ **Server installation**: Installation, service management, status (5/5)
-- ✅ **Uninstaller tests**: Dry-run, role detection, backup (3/3)
-- ✅ **Cluster operation**: DNS, networking, API, applications (11/11)
-
-**Cluster Testing:**
-```bash
-# Test cluster functionality
-sudo KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl cluster-info
-sudo KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl get nodes
-sudo KUBECONFIG=/etc/rancher/rke2/rke2.yaml /var/lib/rancher/rke2/bin/kubectl get pods --all-namespaces
-```
-
-### Kubeconfig note
-Server kubeconfig: `/etc/rancher/rke2/rke2.yaml` (set `KUBECONFIG` or copy to `~/.kube/config`).
-
-### License
-See `LICENSE` file.
-
-### Files
-
-**Scripts:**
-- `scripts/rke2-installer.sh` - Main installer script
-- `scripts/rke2-uninstaller.sh` - Dedicated uninstaller script
-- `scripts/test-installer.sh` - Installer unit test suite
-- `scripts/test-uninstaller.sh` - Uninstaller unit test suite
-- `scripts/test-integration.sh` - CLI-level integration test suite
-- `scripts/test-all.sh` - Unified test runner
-- `scripts/check-coverage.sh` - 100% coverage gate (xtrace-based)
-- `scripts/build-release-artifacts.sh` - Release package builder (`tar.gz` + `.sha256`)
-
-**Examples:**
-- `examples/server-config.yaml` - Example server configuration
-- `examples/agent-config.yaml` - Example agent configuration
-- `examples/server-config-extended-tokens.yaml` - Server config with extended CNI token expiration
-
-### Production Status
-✅ **Production Ready** - All components tested and verified for production use.
-- RKE2 Version: v1.33.7+rke2r1
-- Kubernetes Version: v1.33.7+rke2r1
-- Supported OS: Red Hat Enterprise Linux 9.6, Ubuntu, CentOS
-- Architecture: x86_64, amd64, aarch64, arm64
+## License
+MIT (see `LICENSE`).
