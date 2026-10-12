@@ -14,3 +14,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - CI now validates integration tests and release artifact generation in addition to lint, unit tests, and coverage gates.
+- README documents checksum install, dual uninstallers, config overwrite rules, path overrides, and operator pitfalls.
