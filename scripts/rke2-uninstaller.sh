@@ -7,6 +7,9 @@ RKE2_CONFIG_FILE="${RKE2_CONFIG_FILE:-$RKE2_CONFIG_DIR/config.yaml}"
 RKE2_KUBECONFIG_FILE="${RKE2_KUBECONFIG_FILE:-$RKE2_CONFIG_DIR/rke2.yaml}"
 RKE2_NODE_TOKEN_FILE="${RKE2_NODE_TOKEN_FILE:-/var/lib/rancher/rke2/server/node-token}"
 RKE2_SYSTEMD_UNIT_DIR="${RKE2_SYSTEMD_UNIT_DIR:-/usr/lib/systemd/system}"
+# Official get.rke2.io tarball installs place units under /usr/local/lib;
+# RPM installs use /usr/lib; a relocated tar prefix moves units to /etc.
+RKE2_SYSTEMD_UNIT_SEARCH_DIRS="${RKE2_SYSTEMD_UNIT_SEARCH_DIRS:-/usr/local/lib/systemd/system /usr/lib/systemd/system /etc/systemd/system}"
 RKE2_SERVER_UNINSTALL_SCRIPT="${RKE2_SERVER_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-uninstall.sh}"
 RKE2_AGENT_UNINSTALL_SCRIPT="${RKE2_AGENT_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-agent-uninstall.sh}"
 RKE2_BINARY_PATH="${RKE2_BINARY_PATH:-/usr/bin/rke2}"
@@ -58,11 +61,11 @@ detect_role() {
 	local server_installed=false
 	local agent_installed=false
 
-	if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" ]]; then
+	if find_unit_file server >/dev/null; then
 		server_installed=true
 	fi
 
-	if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service" ]]; then
+	if find_unit_file agent >/dev/null; then
 		agent_installed=true
 	fi
 
@@ -90,6 +93,33 @@ read_space_separated_paths() {
 	printf '%s\n' "${paths[@]}"
 }
 
+find_unit_file() {
+	local role="$1"
+	local svc="rke2-${role}.service"
+	local candidate dir fragment
+
+	if [[ -f "${RKE2_SYSTEMD_UNIT_DIR}/${svc}" ]]; then
+		echo "${RKE2_SYSTEMD_UNIT_DIR}/${svc}"
+		return 0
+	fi
+
+	while IFS= read -r dir; do
+		candidate="${dir}/${svc}"
+		if [[ -f "$candidate" ]]; then
+			echo "$candidate"
+			return 0
+		fi
+	done < <(read_space_separated_paths "$RKE2_SYSTEMD_UNIT_SEARCH_DIRS")
+
+	fragment="$(systemctl show "${svc}" --property=FragmentPath --value 2>/dev/null || true)"
+	if [[ -n "$fragment" && -f "$fragment" ]]; then
+		echo "$fragment"
+		return 0
+	fi
+
+	return 1
+}
+
 create_backup() {
 	local role="$1" backup_dir="$2"
 
@@ -114,9 +144,10 @@ create_backup() {
 		log_info "✓ Backed up node-token"
 	fi
 
-	# Backup service files
-	if [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" ]]; then
-		cp "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" "$backup_dir/"
+	# Backup service files from the resolved unit path (tarball, RPM, or custom).
+	local unit_path
+	if unit_path="$(find_unit_file "$role")"; then
+		cp "$unit_path" "$backup_dir/"
 		log_info "✓ Backed up service file"
 	fi
 
@@ -322,8 +353,8 @@ main() {
 		backup_dir="$RKE2_BACKUP_ROOT/rke2-backup-$(date +%Y%m%d-%H%M%S)"
 	fi
 
-	# Check if RKE2 is installed
-	if ! [[ -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-$role.service" ]]; then
+	# Check if RKE2 is installed. Tarball installs do not use RKE2_SYSTEMD_UNIT_DIR.
+	if ! find_unit_file "$role" >/dev/null; then
 		log_error "RKE2 $role is not installed on this system."
 		exit 1
 	fi

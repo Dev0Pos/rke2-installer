@@ -167,6 +167,52 @@ EOF
 	teardown_uninstaller_test_env
 }
 
+test_unit_file_discovery() {
+	setup_uninstaller_test_env
+
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	local alt_dir="$TEST_ROOT/usr/local/lib/systemd/system"
+	mkdir -p "$alt_dir" "$TEST_ROOT/empty-search"
+	touch "$alt_dir/rke2-server.service"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$TEST_ROOT/empty-search $alt_dir"
+	[[ "$(detect_role)" == "server" ]]
+	[[ "$(find_unit_file server)" == "$alt_dir/rke2-server.service" ]]
+
+	local backup_dir="$TEST_ROOT/backup-from-tarball-unit"
+	create_backup server "$backup_dir"
+	[[ -f "$backup_dir/rke2-server.service" ]]
+
+	require_root() { :; }
+	show_what_will_be_done() { :; }
+	(main --role server --dry-run --backup-dir "$TEST_ROOT/custom-backup")
+
+	# systemd FragmentPath covers custom prefixes the search list does not know.
+	rm -f "$alt_dir/rke2-server.service"
+	local custom_unit="$TEST_ROOT/custom/rke2-server.service"
+	mkdir -p "$(dirname "$custom_unit")"
+	touch "$custom_unit"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$TEST_ROOT/empty-search"
+	systemctl() {
+		case "$1" in
+		show) echo "$custom_unit" ;;
+		*) return 0 ;;
+		esac
+	}
+	[[ "$(detect_role)" == "server" ]]
+	[[ "$(find_unit_file server)" == "$custom_unit" ]]
+
+	rm -f "$custom_unit"
+	systemctl() { return 0; }
+	[[ "$(detect_role)" == "none" ]]
+	if (main --role server --force >/tmp/uninstaller-test.err 2>&1); then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/uninstaller-test.err)" "is not installed"
+
+	teardown_uninstaller_test_env
+}
+
 test_main_dispatch() {
 	setup_uninstaller_test_env
 
@@ -209,6 +255,7 @@ main() {
 	run_test "role validation and detection" test_role_validation_and_detection
 	run_test "backup and cleanup operations" test_backup_and_cleanup
 	run_test "dry run prompt and uninstall paths" test_dry_run_confirm_and_uninstall
+	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "main dispatch and validation" test_main_dispatch
 
 	if [[ "$FAILED" -ne 0 ]]; then
