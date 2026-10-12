@@ -223,12 +223,82 @@ test_checksum_url_and_lifecycle() {
 	teardown_env
 }
 
+test_checksum_manifest_contracts() {
+	setup_env
+
+	local wrong_name="$TEST_ROOT/wrong-name.sha256"
+	echo "${MOCK_INSTALLER_SHA}  other-installer.sh" >"$wrong_name"
+	if "$INSTALLER_SCRIPT" install --role server --cluster-init --secure-install --installer-sha256-url "file://$wrong_name" >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/rke2-integration.err)" "Could not extract installer checksum"
+
+	local star_name="$TEST_ROOT/star-name.sha256"
+	echo "${MOCK_INSTALLER_SHA} *$(basename "$MOCK_INSTALLER_SCRIPT")" >"$star_name"
+	"$INSTALLER_SCRIPT" install --role server --cluster-init --secure-install --installer-sha256-url "file://$star_name"
+	assert_file_exists "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+
+	local bare_hash="$TEST_ROOT/bare-hash.sha256"
+	echo "${MOCK_INSTALLER_SHA}" >"$bare_hash"
+	"$INSTALLER_SCRIPT" install --role server --force --secure-install --installer-sha256-url "file://$bare_hash"
+
+	teardown_env
+}
+
+test_uninstaller_role_safety_and_artifacts() {
+	setup_env
+
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	if "$UNINSTALLER_SCRIPT" --force >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/rke2-integration.err)" "Both server and agent are installed. Please specify --role server|agent"
+
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	if "$UNINSTALLER_SCRIPT" --role agent --force >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/rke2-integration.err)" "RKE2 agent is not installed on this system."
+
+	local dist_dir="$TEST_ROOT/dist"
+	"$SCRIPT_DIR/build-release-artifacts.sh" "coverage-test" "$dist_dir"
+	assert_file_exists "$dist_dir/rke2-installer-coverage-test.tar.gz"
+	assert_file_exists "$dist_dir/rke2-installer-coverage-test.tar.gz.sha256"
+	local listing
+	listing="$(tar -tzf "$dist_dir/rke2-installer-coverage-test.tar.gz")"
+	assert_contains "$listing" "rke2-installer-coverage-test/scripts/rke2-installer.sh"
+	assert_contains "$listing" "rke2-installer-coverage-test/scripts/rke2-uninstaller.sh"
+	assert_contains "$listing" "rke2-installer-coverage-test/examples/server-config-extended-tokens.yaml"
+
+	local default_dist="$TEST_ROOT/dist-default"
+	"$SCRIPT_DIR/build-release-artifacts.sh" "" "$default_dist"
+	local default_tarball="" candidate
+	for candidate in "$default_dist"/rke2-installer-*.tar.gz; do
+		if [[ -f "$candidate" ]]; then
+			default_tarball="$candidate"
+			break
+		fi
+	done
+	[[ -n "$default_tarball" ]]
+	assert_file_exists "${default_tarball}.sha256"
+
+	teardown_env
+}
+
 main() {
 	log_info "Running integration tests..."
 	test_secure_install_checksum
 	log_info "✓ secure install checksum paths"
 	test_checksum_url_and_lifecycle
 	log_info "✓ checksum URL and lifecycle paths"
+	test_checksum_manifest_contracts
+	log_info "✓ checksum manifest filename and format contracts"
+	test_uninstaller_role_safety_and_artifacts
+	log_info "✓ uninstaller role safety and release artifacts"
 	log_info "All integration tests passed"
 }
 

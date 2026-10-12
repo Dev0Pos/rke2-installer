@@ -203,6 +203,57 @@ test_main_dispatch() {
 	teardown_uninstaller_test_env
 }
 
+test_role_safety_contracts() {
+	setup_uninstaller_test_env
+
+	mkdir -p "$RKE2_CONFIG_DIR" "$(dirname "$RKE2_NODE_TOKEN_FILE")"
+	echo "cfg" >"$RKE2_CONFIG_FILE"
+	echo "kube" >"$RKE2_KUBECONFIG_FILE"
+	echo "token" >"$RKE2_NODE_TOKEN_FILE"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+
+	if (main --force >/tmp/uninstaller-test.err 2>&1); then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/uninstaller-test.err)" "Both server and agent are installed. Please specify --role server|agent"
+
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	if (main --role agent --force >/tmp/uninstaller-test.err 2>&1); then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/uninstaller-test.err)" "RKE2 agent is not installed on this system."
+
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	local agent_backup="$TEST_ROOT/agent-backup"
+	create_backup agent "$agent_backup"
+	[[ -f "$agent_backup/config.yaml" ]]
+	[[ -f "$agent_backup/node-token" ]]
+	[[ -f "$agent_backup/rke2-agent.service" ]]
+	if [[ -f "$agent_backup/rke2.yaml" ]]; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	local agent_dry_run
+	agent_dry_run="$(show_what_will_be_done agent "$TEST_ROOT/backup-preview" false)"
+	assert_contains "$agent_dry_run" "$RKE2_CONFIG_FILE"
+	if assert_contains "$agent_dry_run" "$RKE2_KUBECONFIG_FILE"; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	if (main --unknown-flag >/tmp/uninstaller-test.err 2>&1); then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/uninstaller-test.err)" "Unknown option: --unknown-flag"
+
+	teardown_uninstaller_test_env
+}
+
 main() {
 	log_info "Running uninstaller unit tests..."
 	run_test "syntax and help" test_syntax_and_help
@@ -210,6 +261,7 @@ main() {
 	run_test "backup and cleanup operations" test_backup_and_cleanup
 	run_test "dry run prompt and uninstall paths" test_dry_run_confirm_and_uninstall
 	run_test "main dispatch and validation" test_main_dispatch
+	run_test "role safety contracts" test_role_safety_contracts
 
 	if [[ "$FAILED" -ne 0 ]]; then
 		log_error "$FAILED/$TOTAL tests failed"
