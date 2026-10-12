@@ -580,6 +580,64 @@ EOF
 	teardown_installer_test_env
 }
 
+test_unit_file_discovery() {
+	setup_installer_test_env
+
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	local alt_dir="$TEST_ROOT/usr/local/lib/systemd/system"
+	mkdir -p "$alt_dir"
+	touch "$alt_dir/rke2-server.service"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$TEST_ROOT/empty-search $alt_dir"
+	mkdir -p "$TEST_ROOT/empty-search"
+	command_exists() { return 1; }
+	systemctl() {
+		case "$1" in
+		status)
+			echo "mock status"
+			return 0
+			;;
+		*) return 0 ;;
+		esac
+	}
+	local status_output
+	status_output="$(show_status server)"
+	assert_contains "$status_output" "RKE2 server Status"
+	[[ "$(find_unit_file server)" == "$alt_dir/rke2-server.service" ]]
+
+	# systemd FragmentPath is used when preferred dirs do not contain the unit.
+	rm -f "$alt_dir/rke2-server.service"
+	local custom_unit="$TEST_ROOT/custom/rke2-server.service"
+	mkdir -p "$(dirname "$custom_unit")"
+	touch "$custom_unit"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$TEST_ROOT/empty-search"
+	systemctl() {
+		case "$1" in
+		show) echo "$custom_unit" ;;
+		status)
+			echo "mock status"
+			return 0
+			;;
+		*) return 0 ;;
+		esac
+	}
+	status_output="$(show_status server)"
+	assert_contains "$status_output" "RKE2 server Status"
+	[[ "$(find_unit_file server)" == "$custom_unit" ]]
+
+	rm -f "$custom_unit"
+	systemctl() { return 0; }
+	if find_unit_file server >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+	if show_status server >/tmp/installer-test.out 2>/tmp/installer-test.err; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	teardown_installer_test_env
+}
+
 test_example_files() {
 	[[ -f "$SCRIPT_DIR/../examples/server-config.yaml" ]]
 	[[ -f "$SCRIPT_DIR/../examples/agent-config.yaml" ]]
@@ -597,6 +655,7 @@ main() {
 	run_test "install and service startup paths" test_install_and_enable_start
 	run_test "status info uninstall and main dispatch" test_status_info_uninstall_and_main
 	run_test "extended error-path coverage" test_additional_error_paths_for_coverage
+	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "example files validation" test_example_files
 
 	if [[ "$FAILED" -ne 0 ]]; then
