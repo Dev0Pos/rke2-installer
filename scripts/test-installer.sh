@@ -644,6 +644,112 @@ test_example_files() {
 	[[ -f "$SCRIPT_DIR/../examples/server-config-extended-tokens.yaml" ]]
 	assert_contains "$(cat "$SCRIPT_DIR/../examples/server-config.yaml")" "write-kubeconfig-mode"
 	assert_contains "$(cat "$SCRIPT_DIR/../examples/agent-config.yaml")" "server:"
+	assert_contains "$(cat "$SCRIPT_DIR/../examples/server-config-extended-tokens.yaml")" "service-account-max-token-expiration=168h"
+	assert_contains "$(cat "$SCRIPT_DIR/../examples/server-config-extended-tokens.yaml")" "service-account-extend-token-expiration=true"
+}
+
+test_checksum_and_config_contracts() {
+	setup_installer_test_env
+
+	local payload="$TEST_ROOT/payload.sh"
+	echo "echo payload" >"$payload"
+	local expected_sha
+	expected_sha="$(sha256sum "$payload" | awk '{print $1}')"
+	local expected_sha_upper
+	expected_sha_upper="$(tr '[:lower:]' '[:upper:]' <<<"$expected_sha")"
+	local other_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	local later_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	local mismatch_manifest="$TEST_ROOT/checksum-mismatch.txt"
+	echo "$other_sha  other-installer.sh" >"$mismatch_manifest"
+	if extract_checksum_from_file "$mismatch_manifest" "$payload" "$RKE2_INSTALL_URL" >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	local skip_then_match="$TEST_ROOT/checksum-skip-then-match.txt"
+	cat >"$skip_then_match" <<EOF
+$other_sha  other-installer.sh
+$later_sha  payload.sh
+EOF
+	[[ "$(extract_checksum_from_file "$skip_then_match" "$payload" "$RKE2_INSTALL_URL")" == "$later_sha" ]]
+
+	local bare_manifest="$TEST_ROOT/checksum-bare.txt"
+	echo "$expected_sha_upper" >"$bare_manifest"
+	[[ "$(extract_checksum_from_file "$bare_manifest" "$payload" "$RKE2_INSTALL_URL")" == "$expected_sha" ]]
+
+	local star_manifest="$TEST_ROOT/checksum-star.txt"
+	echo "$expected_sha *payload.sh" >"$star_manifest"
+	[[ "$(extract_checksum_from_file "$star_manifest" "$payload" "$RKE2_INSTALL_URL")" == "$expected_sha" ]]
+
+	local url_manifest="$TEST_ROOT/checksum-url-name.txt"
+	echo "$expected_sha  $RKE2_INSTALL_URL" >"$url_manifest"
+	[[ "$(extract_checksum_from_file "$url_manifest" "/tmp/tmp.installer" "$RKE2_INSTALL_URL")" == "$expected_sha" ]]
+
+	local url_basename_manifest="$TEST_ROOT/checksum-url-basename.txt"
+	echo "$expected_sha  $(basename "$RKE2_INSTALL_URL")" >"$url_basename_manifest"
+	[[ "$(extract_checksum_from_file "$url_basename_manifest" "/tmp/tmp.installer" "$RKE2_INSTALL_URL")" == "$expected_sha" ]]
+
+	command_exists() { [[ "$1" == "sha256sum" ]]; }
+	if (require_command missing-tool >/tmp/installer-test.err 2>&1); then
+		teardown_installer_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/installer-test.err)" "Required command is missing: missing-tool"
+
+	curl() {
+		if [[ "$1" == "-sfL" && "$3" == "-o" ]]; then
+			cp "$2" "$4"
+			return 0
+		fi
+		return 1
+	}
+
+	if (verify_downloaded_installer_checksum "$payload" "" "$mismatch_manifest" >/tmp/installer-test.err 2>&1); then
+		teardown_installer_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/installer-test.err)" "Could not extract installer checksum"
+
+	if (verify_downloaded_installer_checksum "$payload" "" "" >/tmp/installer-test.err 2>&1); then
+		teardown_installer_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/installer-test.err)" "expected checksum is empty"
+
+	if (verify_downloaded_installer_checksum "$payload" "not-a-sha256" "" >/tmp/installer-test.err 2>&1); then
+		teardown_installer_test_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/installer-test.err)" "Invalid SHA256 format"
+
+	verify_downloaded_installer_checksum "$payload" "$expected_sha_upper" ""
+
+	local url_wrong_hash="$TEST_ROOT/checksum-url-wrong-hash.txt"
+	echo "$other_sha  payload.sh" >"$url_wrong_hash"
+	verify_downloaded_installer_checksum "$payload" "$expected_sha" "$url_wrong_hash"
+
+	rm -f "$RKE2_CONFIG_FILE"
+	write_config_from_flags server "" "" "false"
+	local server_cfg
+	server_cfg="$(cat "$RKE2_CONFIG_FILE")"
+	assert_contains "$server_cfg" "write-kubeconfig-mode: \"0644\""
+	if assert_contains "$server_cfg" "cluster-init: true"; then
+		teardown_installer_test_env
+		return 1
+	fi
+	if assert_contains "$server_cfg" "token:"; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	echo "/swapfile none swap sw 0 0" >"$RKE2_FSTAB_FILE"
+	is_swap_on() { return 1; }
+	disable_swap
+	[[ "$(cat "$RKE2_FSTAB_FILE")" == "/swapfile none swap sw 0 0" ]]
+	[[ -z "$(find "$TEST_ROOT/etc" -name 'fstab.backup.*' -print)" ]]
+
+	teardown_installer_test_env
 }
 
 main() {
@@ -657,6 +763,7 @@ main() {
 	run_test "extended error-path coverage" test_additional_error_paths_for_coverage
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "example files validation" test_example_files
+	run_test "checksum parsing and config contracts" test_checksum_and_config_contracts
 
 	if [[ "$FAILED" -ne 0 ]]; then
 		log_error "$FAILED/$TOTAL tests failed"
