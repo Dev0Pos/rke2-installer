@@ -289,6 +289,69 @@ test_uninstaller_role_safety_and_artifacts() {
 	teardown_env
 }
 
+test_tarball_unit_layout_and_agent_token_cli() {
+	setup_env
+
+	local tarball_dir="$TEST_ROOT/usr/local/lib/systemd/system"
+	local etc_dir="$TEST_ROOT/etc/systemd/system"
+	mkdir -p "$tarball_dir" "$etc_dir"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$tarball_dir $RKE2_SYSTEMD_UNIT_DIR $etc_dir"
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	echo "# tarball unit" >"$tarball_dir/rke2-server.service"
+	echo "cfg" >"$RKE2_CONFIG_FILE"
+
+	local status_output
+	status_output="$("$INSTALLER_SCRIPT" status --role server)"
+	assert_contains "$status_output" "RKE2 server Status"
+	if assert_contains "$status_output" "Service rke2-server is not installed."; then
+		teardown_env
+		return 1
+	fi
+
+	local backup_dir="$TEST_ROOT/tarball-backup"
+	"$UNINSTALLER_SCRIPT" --role server --force --backup-dir "$backup_dir"
+	assert_file_exists "$backup_dir/rke2-server.service"
+	assert_contains "$(cat "$backup_dir/rke2-server.service")" "tarball unit"
+
+	# Relocated prefix: unit lives only under /etc/systemd/system.
+	rm -f "$tarball_dir/rke2-server.service" "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	echo "# relocated unit" >"$etc_dir/rke2-server.service"
+	status_output="$("$INSTALLER_SCRIPT" status --role server)"
+	assert_contains "$status_output" "RKE2 server Status"
+
+	# Official uninstall script failure is fatal and must not run --clean-data.
+	mkdir -p "$TEST_ROOT/var/lib/rancher/rke2" "$TEST_ROOT/opt/rke2"
+	echo keep-me >"$TEST_ROOT/var/lib/rancher/rke2/cluster.db"
+	cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+	chmod +x "$RKE2_SERVER_UNINSTALL_SCRIPT"
+	if "$UNINSTALLER_SCRIPT" --role server --force --clean-data --backup-dir "$TEST_ROOT/failing-official-backup" >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_file_exists "$TEST_ROOT/var/lib/rancher/rke2/cluster.db"
+	if "$INSTALLER_SCRIPT" uninstall --role server >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_file_exists "$TEST_ROOT/var/lib/rancher/rke2/cluster.db"
+
+	# Agent --config with a YAML token is not enough; CLI token is required.
+	cat >"$TEST_ROOT/agent-config.yaml" <<'EOF'
+token: "from-config-only"
+server: "https://server.example:9345"
+EOF
+	if "$INSTALLER_SCRIPT" install --role agent --config "$TEST_ROOT/agent-config.yaml" >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_contains "$(cat /tmp/rke2-integration.err)" "For agent role, --token or --token-file is required."
+
+	teardown_env
+}
+
 main() {
 	log_info "Running integration tests..."
 	test_secure_install_checksum
@@ -299,6 +362,8 @@ main() {
 	log_info "✓ checksum manifest filename and format contracts"
 	test_uninstaller_role_safety_and_artifacts
 	log_info "✓ uninstaller role safety and release artifacts"
+	test_tarball_unit_layout_and_agent_token_cli
+	log_info "✓ tarball unit layout and agent CLI token contract"
 	log_info "All integration tests passed"
 }
 
