@@ -104,6 +104,32 @@ test_write_config_and_copy_and_token() {
 	copy_config_if_provided "$source_cfg"
 	assert_contains "$(cat "$RKE2_CONFIG_FILE")" "token: copied"
 
+	# --config always replaces an existing dest config; flag generation never does.
+	echo "old: true" >"$RKE2_CONFIG_FILE"
+	echo "new: true" >"$source_cfg"
+	copy_config_if_provided "$source_cfg"
+	assert_contains "$(cat "$RKE2_CONFIG_FILE")" "new: true"
+	if assert_contains "$(cat "$RKE2_CONFIG_FILE")" "old: true"; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	# --server-url is agent-generated-config only; servers must not write server:.
+	rm -f "$RKE2_CONFIG_FILE"
+	write_config_from_flags server "tok" "https://should-not-appear:9345" "true"
+	local server_with_url
+	server_with_url="$(cat "$RKE2_CONFIG_FILE")"
+	assert_contains "$server_with_url" "token: \"tok\""
+	assert_contains "$server_with_url" "cluster-init: true"
+	if assert_contains "$server_with_url" "server:"; then
+		teardown_installer_test_env
+		return 1
+	fi
+	if assert_contains "$server_with_url" "should-not-appear"; then
+		teardown_installer_test_env
+		return 1
+	fi
+
 	echo "tok-from-file" >"$TEST_ROOT/token.txt"
 	[[ "$(read_token "direct" "")" == "direct" ]]
 	[[ "$(read_token "" "$TEST_ROOT/token.txt")" == "tok-from-file" ]]
@@ -686,6 +712,53 @@ EOF
 	teardown_installer_test_env
 }
 
+test_unit_search_defaults_and_precedence() {
+	setup_installer_test_env
+
+	# Lock the Ubuntu/Debian tarball layout that status used to miss.
+	[[ "$RKE2_SYSTEMD_UNIT_SEARCH_DIRS" == "/usr/local/lib/systemd/system /usr/lib/systemd/system /etc/systemd/system" ]]
+
+	local tarball_dir="$TEST_ROOT/usr/local/lib/systemd/system"
+	local etc_dir="$TEST_ROOT/etc/systemd/system"
+	mkdir -p "$tarball_dir" "$etc_dir"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$tarball_dir $RKE2_SYSTEMD_UNIT_DIR $etc_dir"
+
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$tarball_dir/rke2-server.service"
+	[[ "$(find_unit_file server)" == "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" ]]
+
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$etc_dir/rke2-server.service"
+	[[ "$(find_unit_file server)" == "$tarball_dir/rke2-server.service" ]]
+
+	rm -f "$tarball_dir/rke2-server.service"
+	[[ "$(find_unit_file server)" == "$etc_dir/rke2-server.service" ]]
+
+	rm -f "$etc_dir/rke2-server.service"
+	local custom_unit="$TEST_ROOT/custom/rke2-server.service"
+	mkdir -p "$(dirname "$custom_unit")"
+	touch "$custom_unit"
+	systemctl() {
+		printf '%s\n' "$*" >"$TEST_ROOT/systemctl-show.args"
+		case " $* " in
+		*" --value "*) echo "$custom_unit" ;;
+		*) echo "FragmentPath=$custom_unit" ;;
+		esac
+	}
+	[[ "$(find_unit_file server)" == "$custom_unit" ]]
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--property=FragmentPath"
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--value"
+
+	rm -f "$custom_unit"
+	systemctl() { echo "/does-not-exist/rke2-server.service"; }
+	if find_unit_file server >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	teardown_installer_test_env
+}
+
 test_example_files() {
 	[[ -f "$SCRIPT_DIR/../examples/server-config.yaml" ]]
 	[[ -f "$SCRIPT_DIR/../examples/agent-config.yaml" ]]
@@ -811,6 +884,7 @@ main() {
 	run_test "extended error-path coverage" test_additional_error_paths_for_coverage
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
+	run_test "default unit search paths and precedence" test_unit_search_defaults_and_precedence
 	run_test "example files validation" test_example_files
 	run_test "checksum parsing and config contracts" test_checksum_and_config_contracts
 

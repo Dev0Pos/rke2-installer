@@ -128,6 +128,15 @@ test_dry_run_confirm_and_uninstall() {
 	assert_contains "$confirm_cancel_output" "Uninstall cancelled."
 
 	(echo "yes" | confirm_uninstall server true) >/tmp/uninstaller-test.out 2>&1
+	(echo "YES" | confirm_uninstall server false) >/tmp/uninstaller-test.out 2>&1
+
+	# Only yes/YES/Yes continue. Shorthand and other truthy words must not uninstall.
+	confirm_cancel_output="$( (echo "y" | confirm_uninstall server false) 2>&1 || true)"
+	assert_contains "$confirm_cancel_output" "Uninstall cancelled."
+	confirm_cancel_output="$( (echo "true" | confirm_uninstall server false) 2>&1 || true)"
+	assert_contains "$confirm_cancel_output" "Uninstall cancelled."
+	confirm_cancel_output="$( (echo "" | confirm_uninstall server false) 2>&1 || true)"
+	assert_contains "$confirm_cancel_output" "Uninstall cancelled."
 
 	cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
@@ -171,6 +180,8 @@ EOF
 test_unit_file_discovery() {
 	setup_uninstaller_test_env
 
+	[[ "$RKE2_SYSTEMD_UNIT_SEARCH_DIRS" == "/usr/local/lib/systemd/system /usr/lib/systemd/system /etc/systemd/system" ]]
+
 	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
 	local alt_dir="$TEST_ROOT/usr/local/lib/systemd/system"
 	mkdir -p "$alt_dir" "$TEST_ROOT/empty-search"
@@ -194,15 +205,41 @@ test_unit_file_discovery() {
 	touch "$custom_unit"
 	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$TEST_ROOT/empty-search"
 	systemctl() {
-		case "$1" in
-		show) echo "$custom_unit" ;;
-		*) return 0 ;;
+		printf '%s\n' "$*" >"$TEST_ROOT/systemctl-show.args"
+		case " $* " in
+		*" --value "*) echo "$custom_unit" ;;
+		*) echo "FragmentPath=$custom_unit" ;;
 		esac
 	}
 	[[ "$(detect_role)" == "server" ]]
 	[[ "$(find_unit_file server)" == "$custom_unit" ]]
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--property=FragmentPath"
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--value"
 
+	# Relocated tar prefix and UNIT_DIR precedence.
+	local etc_dir="$TEST_ROOT/etc/systemd/system"
+	mkdir -p "$etc_dir"
 	rm -f "$custom_unit"
+	export RKE2_SYSTEMD_UNIT_SEARCH_DIRS="$alt_dir $etc_dir"
+	systemctl() { return 0; }
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$etc_dir/rke2-server.service"
+	[[ "$(find_unit_file server)" == "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service" ]]
+	rm -f "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	[[ "$(find_unit_file server)" == "$etc_dir/rke2-server.service" ]]
+	rm -f "$etc_dir/rke2-server.service"
+
+	systemctl() {
+		printf '%s\n' "$*" >"$TEST_ROOT/systemctl-show.args"
+		echo "/does-not-exist/rke2-server.service"
+	}
+	if find_unit_file server >/tmp/uninstaller-test.err 2>&1; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--property=FragmentPath"
+	assert_contains "$(cat "$TEST_ROOT/systemctl-show.args")" "--value"
+
 	systemctl() { return 0; }
 	[[ "$(detect_role)" == "none" ]]
 	if (main --role server --force >/tmp/uninstaller-test.err 2>&1); then

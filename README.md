@@ -89,7 +89,7 @@ CNI tokens that drop daily: use the extended-tokens example (`service-account-ma
 ./scripts/rke2-installer.sh info --role server     # host, paths, dir sizes; no root
 ```
 
-`status` exits `1` if `/usr/lib/systemd/system/rke2-<role>.service` is missing. `info` always prints (including “not installed”). Server `info` lists API `https://localhost:6443`, node port `9345`, and default CNI text `Canal (Flannel + Calico)` (not probed).
+`status` exits `1` if no `rke2-<role>.service` is found (unit search below). Ubuntu/Debian `get.rke2.io` installs land in `/usr/local/lib`. `info` always prints (including “not installed”) and uses `systemctl list-unit-files`, not that search. Server `info` lists API `https://localhost:6443`, node port `9345`, and default CNI text `Canal (Flannel + Calico)` (not probed).
 
 Start path: `systemctl enable` + up to 3 `restart`s (first wait 120s, then 30s). Server then waits up to 60s for `etcd --config-file`. Failure: `journalctl -u rke2-<role> -e`.
 
@@ -99,10 +99,10 @@ Two entry points. The dedicated script is the operator path.
 
 | | `rke2-installer.sh uninstall --role …` | `rke2-uninstaller.sh` |
 |---|---|---|
-| Role | Required | Auto-detected from unit files; `--role` required if both exist |
+| Role | Required | Auto-detected with the same unit search as `status`; `--role` required if both exist |
 | Confirm | None | Type `yes` unless `--force` |
 | Dry-run | No | `--dry-run` (no root, no backup) |
-| Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token | Same + unit file; `--backup-dir` overrides |
+| Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token | Same + resolved unit file; `--backup-dir` overrides |
 | Official script | First executable match: override path, then `/usr/local/bin`, `/usr/bin` (RPM), `/opt/rke2/bin`. Agent also falls back from `rke2-agent-uninstall.sh` to `rke2-uninstall.sh`. | Stop/disable unit first, then the same search |
 | Data wipe | No | `--clean-data` removes `/var/lib/rancher/rke2`, `/etc/rancher/rke2`, `/opt/rke2`, `/usr/bin/rke2`, and the official uninstall scripts |
 
@@ -141,7 +141,8 @@ Set before invoke (tests do this). Defaults:
 | `RKE2_CONFIG_FILE` | `$RKE2_CONFIG_DIR/config.yaml` |
 | `RKE2_KUBECONFIG_FILE` | `$RKE2_CONFIG_DIR/rke2.yaml` |
 | `RKE2_NODE_TOKEN_FILE` | `/var/lib/rancher/rke2/server/node-token` |
-| `RKE2_SYSTEMD_UNIT_DIR` | `/usr/lib/systemd/system` |
+| `RKE2_SYSTEMD_UNIT_DIR` | `/usr/lib/systemd/system` (checked first) |
+| `RKE2_SYSTEMD_UNIT_SEARCH_DIRS` | `/usr/local/lib/systemd/system /usr/lib/systemd/system /etc/systemd/system` |
 | `RKE2_INSTALL_URL` | `https://get.rke2.io` |
 | `RKE2_BACKUP_ROOT` | `/tmp` |
 | `RKE2_DATA_DIRS` | `/var/lib/rancher/rke2 /etc/rancher/rke2 /opt/rke2` |
@@ -149,6 +150,8 @@ Set before invoke (tests do this). Defaults:
 | `RKE2_AGENT_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-agent-uninstall.sh` (preferred; search continues if missing) |
 | `RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS` | `/usr/local/bin /usr/bin /opt/rke2/bin` |
 | `RKE2_BINARY_PATH` | `/usr/bin/rke2` (uninstaller `--clean-data` only) |
+
+`status` and `rke2-uninstaller.sh` then fall back to `systemctl show --property=FragmentPath` if those dirs miss the unit.
 
 ## Pitfalls
 
@@ -159,7 +162,8 @@ Set before invoke (tests do this). Defaults:
 - Checksum URL file: first 64-hex digest whose optional 2nd field is empty, equals `RKE2_INSTALL_URL` (or its basename, default `get.rke2.io`), or equals the tempfile path. Other filenames are skipped.
 - First `rke2-server` start blocks ~2 minutes for etcd.
 - Both unit files installed → dedicated uninstaller needs `--role`.
-- `status` is not a health probe; it only requires the unit file.
+- `status` is not a health probe; it only requires a resolvable unit file (tarball, RPM, relocated, or `FragmentPath`).
+- Dedicated uninstaller refuses to run if that search finds nothing; `rke2-installer.sh uninstall` still only needs the official uninstall script.
 
 ## License
 
