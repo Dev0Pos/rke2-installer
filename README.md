@@ -103,7 +103,7 @@ Two entry points. The dedicated script is the operator path.
 | Confirm | None | Type `yes` unless `--force` |
 | Dry-run | No | `--dry-run` (no root, no backup) |
 | Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token | Same + resolved unit file; `--backup-dir` overrides |
-| Official script | `/usr/local/bin/rke2-uninstall.sh` or `rke2-agent-uninstall.sh` | Stop/disable unit first, then the same scripts |
+| Official script | First executable match: override path, then `/usr/local/bin`, `/usr/bin` (RPM), `/opt/rke2/bin`. Agent also falls back from `rke2-agent-uninstall.sh` to `rke2-uninstall.sh`. | Stop/disable unit first, then the same search |
 | Data wipe | No | `--clean-data` removes `/var/lib/rancher/rke2`, `/etc/rancher/rke2`, `/opt/rke2`, `/usr/bin/rke2`, and the official uninstall scripts |
 
 ```bash
@@ -146,8 +146,9 @@ Set before invoke (tests do this). Defaults:
 | `RKE2_INSTALL_URL` | `https://get.rke2.io` |
 | `RKE2_BACKUP_ROOT` | `/tmp` |
 | `RKE2_DATA_DIRS` | `/var/lib/rancher/rke2 /etc/rancher/rke2 /opt/rke2` |
-| `RKE2_SERVER_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-uninstall.sh` |
-| `RKE2_AGENT_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-agent-uninstall.sh` |
+| `RKE2_SERVER_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-uninstall.sh` (preferred; search continues if missing) |
+| `RKE2_AGENT_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-agent-uninstall.sh` (preferred; search continues if missing) |
+| `RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS` | `/usr/local/bin /usr/bin /opt/rke2/bin` |
 | `RKE2_BINARY_PATH` | `/usr/bin/rke2` (uninstaller `--clean-data` only) |
 
 `status` and `rke2-uninstaller.sh` then fall back to `systemctl show --property=FragmentPath` if those dirs miss the unit.

@@ -26,6 +26,7 @@ setup_installer_test_env() {
 	export RKE2_SYSTEMD_UNIT_DIR="$TEST_ROOT/usr/lib/systemd/system"
 	export RKE2_SERVER_UNINSTALL_SCRIPT="$TEST_ROOT/usr/local/bin/rke2-uninstall.sh"
 	export RKE2_AGENT_UNINSTALL_SCRIPT="$TEST_ROOT/usr/local/bin/rke2-agent-uninstall.sh"
+	export RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS="$TEST_ROOT/usr/local/bin $TEST_ROOT/usr/bin $TEST_ROOT/opt/rke2/bin"
 	export RKE2_FSTAB_FILE="$TEST_ROOT/etc/fstab"
 	export RKE2_INSTALL_URL="https://example.invalid/get.rke2.io"
 	export RKE2_BACKUP_ROOT="$TEST_ROOT/tmp"
@@ -664,6 +665,53 @@ test_unit_file_discovery() {
 	teardown_installer_test_env
 }
 
+test_uninstall_script_discovery() {
+	setup_installer_test_env
+
+	rm -f "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT"
+	local rpm_dir="$TEST_ROOT/usr/bin"
+	mkdir -p "$rpm_dir"
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo rpm-server >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script server)" == "$rpm_dir/rke2-uninstall.sh" ]]
+	do_uninstall server
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-server"
+
+	# RPM agent installs ship rke2-uninstall.sh, not rke2-agent-uninstall.sh.
+	rm -f "$rpm_dir/rke2-uninstall.sh" "$RKE2_BACKUP_ROOT/uninstall.log"
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo rpm-agent-fallback >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script agent)" == "$rpm_dir/rke2-uninstall.sh" ]]
+	do_uninstall agent
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-agent-fallback"
+
+	rm -f "$rpm_dir/rke2-uninstall.sh" "$RKE2_BACKUP_ROOT/uninstall.log"
+	local opt_dir="$TEST_ROOT/opt/rke2/bin"
+	mkdir -p "$opt_dir"
+	cat >"$opt_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo opt-prefix >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$opt_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script server)" == "$opt_dir/rke2-uninstall.sh" ]]
+	do_uninstall server
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "opt-prefix"
+
+	rm -f "$opt_dir/rke2-uninstall.sh"
+	if find_uninstall_script server >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	teardown_installer_test_env
+}
+
 test_unit_search_defaults_and_precedence() {
 	setup_installer_test_env
 
@@ -835,6 +883,7 @@ main() {
 	run_test "status info uninstall and main dispatch" test_status_info_uninstall_and_main
 	run_test "extended error-path coverage" test_additional_error_paths_for_coverage
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
+	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
 	run_test "default unit search paths and precedence" test_unit_search_defaults_and_precedence
 	run_test "example files validation" test_example_files
 	run_test "checksum parsing and config contracts" test_checksum_and_config_contracts
