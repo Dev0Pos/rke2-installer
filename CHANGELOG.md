@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Uninstall now locates the official RKE2 uninstall script for RPM (`/usr/bin`) and relocated tarball (`/opt/rke2/bin`) layouts, instead of only `/usr/local/bin`. Agent uninstall also falls back to `rke2-uninstall.sh` when `rke2-agent-uninstall.sh` is absent.
+
 ### Added
 - SHA256 verification flags for secure installer downloads (`--installer-sha256`, `--installer-sha256-url`).
 - CLI-level integration test suite (`scripts/test-integration.sh`).

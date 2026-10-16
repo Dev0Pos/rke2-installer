@@ -35,6 +35,7 @@ setup_env() {
 	export RKE2_SYSTEMD_UNIT_DIR="$TEST_ROOT/usr/lib/systemd/system"
 	export RKE2_SERVER_UNINSTALL_SCRIPT="$TEST_ROOT/usr/local/bin/rke2-uninstall.sh"
 	export RKE2_AGENT_UNINSTALL_SCRIPT="$TEST_ROOT/usr/local/bin/rke2-agent-uninstall.sh"
+	export RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS="$TEST_ROOT/usr/local/bin $TEST_ROOT/usr/bin $TEST_ROOT/opt/rke2/bin"
 	export RKE2_BINARY_PATH="$TEST_ROOT/usr/bin/rke2"
 	export RKE2_BACKUP_ROOT="$TEST_ROOT/tmp"
 	export RKE2_OS_RELEASE_FILE="$TEST_ROOT/etc/os-release"
@@ -289,6 +290,26 @@ test_uninstaller_role_safety_and_artifacts() {
 	teardown_env
 }
 
+test_rpm_layout_uninstall_scripts() {
+	setup_env
+
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	mkdir -p "$TEST_ROOT/usr/bin"
+	cat >"$TEST_ROOT/usr/bin/rke2-uninstall.sh" <<'EOF'
+#!/bin/sh
+set -eu
+echo "rpm-uninstall" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	chmod +x "$TEST_ROOT/usr/bin/rke2-uninstall.sh"
+
+	"$UNINSTALLER_SCRIPT" --role agent --force
+	"$INSTALLER_SCRIPT" uninstall --role server
+	assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "rpm-uninstall"
+
+	teardown_env
+}
+
 main() {
 	log_info "Running integration tests..."
 	test_secure_install_checksum
@@ -299,6 +320,8 @@ main() {
 	log_info "✓ checksum manifest filename and format contracts"
 	test_uninstaller_role_safety_and_artifacts
 	log_info "✓ uninstaller role safety and release artifacts"
+	test_rpm_layout_uninstall_scripts
+	log_info "✓ RPM/tarball uninstall script search paths"
 	log_info "All integration tests passed"
 }
 

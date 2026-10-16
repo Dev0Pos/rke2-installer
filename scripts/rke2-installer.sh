@@ -12,6 +12,9 @@ RKE2_SYSTEMD_UNIT_DIR="${RKE2_SYSTEMD_UNIT_DIR:-/usr/lib/systemd/system}"
 RKE2_SYSTEMD_UNIT_SEARCH_DIRS="${RKE2_SYSTEMD_UNIT_SEARCH_DIRS:-/usr/local/lib/systemd/system /usr/lib/systemd/system /etc/systemd/system}"
 RKE2_SERVER_UNINSTALL_SCRIPT="${RKE2_SERVER_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-uninstall.sh}"
 RKE2_AGENT_UNINSTALL_SCRIPT="${RKE2_AGENT_UNINSTALL_SCRIPT:-/usr/local/bin/rke2-agent-uninstall.sh}"
+# Tarball installs put uninstallers in /usr/local/bin; RPM installs use /usr/bin;
+# a relocated tar prefix (read-only /usr/local) uses /opt/rke2/bin.
+RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS="${RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS:-/usr/local/bin /usr/bin /opt/rke2/bin}"
 RKE2_FSTAB_FILE="${RKE2_FSTAB_FILE:-/etc/fstab}"
 RKE2_INSTALL_URL="${RKE2_INSTALL_URL:-https://get.rke2.io}"
 RKE2_BACKUP_ROOT="${RKE2_BACKUP_ROOT:-/tmp}"
@@ -231,6 +234,36 @@ find_unit_file() {
 		echo "$fragment"
 		return 0
 	fi
+
+	return 1
+}
+
+find_uninstall_script() {
+	local role="$1"
+	local preferred names name dir candidate
+
+	if [[ "$role" == "server" ]]; then
+		preferred="$RKE2_SERVER_UNINSTALL_SCRIPT"
+		names="rke2-uninstall.sh"
+	else
+		preferred="$RKE2_AGENT_UNINSTALL_SCRIPT"
+		names="rke2-agent-uninstall.sh rke2-uninstall.sh"
+	fi
+
+	if [[ -x "$preferred" ]]; then
+		echo "$preferred"
+		return 0
+	fi
+
+	while IFS= read -r name; do
+		while IFS= read -r dir; do
+			candidate="${dir}/${name}"
+			if [[ -x "$candidate" ]]; then
+				echo "$candidate"
+				return 0
+			fi
+		done < <(read_space_separated_paths "$RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS")
+	done < <(read_space_separated_paths "$names")
 
 	return 1
 }
@@ -616,21 +649,13 @@ do_uninstall() {
 
 	log_info "Backup completed: $backup_dir"
 
-	# Perform uninstall
-	if [[ "$role" == "server" ]]; then
-		if [[ -x "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]; then
-			log_info "Running RKE2 server uninstall script..."
-			"$RKE2_SERVER_UNINSTALL_SCRIPT"
-		else
-			log_warn "Missing $RKE2_SERVER_UNINSTALL_SCRIPT – looks like RKE2 server is not installed."
-		fi
+	# Tarball, RPM, and relocated-prefix layouts use different uninstall script paths.
+	local uninstall_script
+	if uninstall_script="$(find_uninstall_script "$role")"; then
+		log_info "Running RKE2 $role uninstall script: $uninstall_script"
+		"$uninstall_script"
 	else
-		if [[ -x "$RKE2_AGENT_UNINSTALL_SCRIPT" ]]; then
-			log_info "Running RKE2 agent uninstall script..."
-			"$RKE2_AGENT_UNINSTALL_SCRIPT"
-		else
-			log_warn "Missing $RKE2_AGENT_UNINSTALL_SCRIPT – looks like RKE2 agent is not installed."
-		fi
+		log_warn "Missing RKE2 uninstall script – looks like RKE2 $role is not installed."
 	fi
 
 	log_info "Uninstall completed. Backup available at: $backup_dir"
