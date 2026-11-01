@@ -216,6 +216,11 @@ test_checksum_url_and_lifecycle() {
 	assert_contains "$status_output" "RKE2 server Status"
 	assert_contains "$info_output" "RKE2 server Information"
 
+	echo "cluster-token" >"$RKE2_CONFIG_FILE"
+	echo "kubeconfig-data" >"$RKE2_KUBECONFIG_FILE"
+	echo "node-token-data" >"$RKE2_NODE_TOKEN_FILE"
+	chmod 0644 "$RKE2_CONFIG_FILE" "$RKE2_KUBECONFIG_FILE" "$RKE2_NODE_TOKEN_FILE"
+
 	"$UNINSTALLER_SCRIPT" --role agent --force
 	"$INSTALLER_SCRIPT" uninstall --role server
 	assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "agent-uninstall"
@@ -329,10 +334,14 @@ test_tarball_unit_layout_and_agent_token_cli() {
 		return 1
 	fi
 
+	echo "token: secret" >"$RKE2_CONFIG_FILE"
+	chmod 0644 "$RKE2_CONFIG_FILE"
 	local backup_dir="$TEST_ROOT/tarball-backup"
 	"$UNINSTALLER_SCRIPT" --role server --force --backup-dir "$backup_dir"
 	assert_file_exists "$backup_dir/rke2-server.service"
 	assert_contains "$(cat "$backup_dir/rke2-server.service")" "tarball unit"
+	[[ "$(stat -c '%a' "$backup_dir")" == "700" ]]
+	[[ "$(stat -c '%a' "$backup_dir/config.yaml")" == "600" ]]
 
 	# Relocated prefix: unit lives only under /etc/systemd/system.
 	rm -f "$tarball_dir/rke2-server.service" "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"

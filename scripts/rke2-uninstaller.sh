@@ -153,27 +153,49 @@ find_uninstall_script() {
 	return 1
 }
 
+restrict_secret_file() {
+	chmod 0600 "$1"
+}
+
+prepare_secret_backup_dir() {
+	local backup_dir="$1"
+	local created=0
+	[[ -d "$backup_dir" ]] || created=1
+	mkdir -p "$backup_dir"
+	# Only tighten directories we create so --backup-dir /tmp cannot chmod /tmp.
+	if [[ "$created" -eq 1 ]]; then
+		chmod 0700 "$backup_dir"
+	fi
+}
+
+copy_secret_file() {
+	local src="$1"
+	local dest_dir="$2"
+	cp "$src" "$dest_dir/"
+	restrict_secret_file "${dest_dir}/$(basename "$src")"
+}
+
 create_backup() {
 	local role="$1" backup_dir="$2"
 
 	log_info "Creating backup in $backup_dir..."
-	mkdir -p "$backup_dir"
+	prepare_secret_backup_dir "$backup_dir"
 
 	# Backup config files
 	if [[ -f "$RKE2_CONFIG_FILE" ]]; then
-		cp "$RKE2_CONFIG_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_CONFIG_FILE" "$backup_dir"
 		log_info "✓ Backed up config.yaml"
 	fi
 
 	# Backup kubeconfig for server
 	if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
-		cp "$RKE2_KUBECONFIG_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_KUBECONFIG_FILE" "$backup_dir"
 		log_info "✓ Backed up rke2.yaml"
 	fi
 
 	# Backup token file if it exists
 	if [[ -f "$RKE2_NODE_TOKEN_FILE" ]]; then
-		cp "$RKE2_NODE_TOKEN_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_NODE_TOKEN_FILE" "$backup_dir"
 		log_info "✓ Backed up node-token"
 	fi
 

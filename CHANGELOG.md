@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Uninstall now locates the official RKE2 uninstall script for RPM (`/usr/bin`) and relocated tarball (`/opt/rke2/bin`) layouts, instead of only `/usr/local/bin`. Agent uninstall also falls back to `rke2-uninstall.sh` when `rke2-agent-uninstall.sh` is absent.
+- Uninstall backups of `config.yaml`, kubeconfig, and `node-token` are now mode `0600` (and a newly created backup directory is `0700`), so a default `/tmp/rke2-backup-*` tree no longer leaves cluster credentials world-readable. Flag-generated and `--config` copies of `config.yaml` are also `0600`.
 
 ### Added
 - SHA256 verification flags for secure installer downloads (`--installer-sha256`, `--installer-sha256-url`).

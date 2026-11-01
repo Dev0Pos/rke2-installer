@@ -145,6 +145,29 @@ ensure_config_dir() {
 	mkdir -p "$RKE2_CONFIG_DIR"
 }
 
+# Token, kubeconfig, and node-token copies must not inherit umask 022 (0644).
+restrict_secret_file() {
+	chmod 0600 "$1"
+}
+
+prepare_secret_backup_dir() {
+	local backup_dir="$1"
+	local created=0
+	[[ -d "$backup_dir" ]] || created=1
+	mkdir -p "$backup_dir"
+	# Only tighten directories we create so --backup-dir /tmp cannot chmod /tmp.
+	if [[ "$created" -eq 1 ]]; then
+		chmod 0700 "$backup_dir"
+	fi
+}
+
+copy_secret_file() {
+	local src="$1"
+	local dest_dir="$2"
+	cp "$src" "$dest_dir/"
+	restrict_secret_file "${dest_dir}/$(basename "$src")"
+}
+
 write_config_from_flags() {
 	local role="$1" token="$2" server_url="$3" cluster_init="$4"
 	ensure_config_dir
@@ -172,6 +195,7 @@ write_config_from_flags() {
 		fi
 		echo "write-kubeconfig-mode: \"0644\""
 	} >"$cfg"
+	restrict_secret_file "$cfg"
 }
 
 copy_config_if_provided() {
@@ -183,6 +207,7 @@ copy_config_if_provided() {
 		fi
 		ensure_config_dir
 		cp "$config_path" "$RKE2_CONFIG_FILE"
+		restrict_secret_file "$RKE2_CONFIG_FILE"
 		log_info "Copied config to $RKE2_CONFIG_FILE"
 	fi
 }
@@ -627,23 +652,23 @@ do_uninstall() {
 	local backup_dir
 	backup_dir="$RKE2_BACKUP_ROOT/rke2-backup-$(date +%Y%m%d-%H%M%S)"
 	log_info "Creating backup in $backup_dir before uninstalling..."
-	mkdir -p "$backup_dir"
+	prepare_secret_backup_dir "$backup_dir"
 
 	# Backup config files
 	if [[ -f "$RKE2_CONFIG_FILE" ]]; then
-		cp "$RKE2_CONFIG_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_CONFIG_FILE" "$backup_dir"
 		log_info "Backed up config.yaml"
 	fi
 
 	# Backup kubeconfig for server
 	if [[ "$role" == "server" && -f "$RKE2_KUBECONFIG_FILE" ]]; then
-		cp "$RKE2_KUBECONFIG_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_KUBECONFIG_FILE" "$backup_dir"
 		log_info "Backed up rke2.yaml"
 	fi
 
 	# Backup token file if it exists
 	if [[ -f "$RKE2_NODE_TOKEN_FILE" ]]; then
-		cp "$RKE2_NODE_TOKEN_FILE" "$backup_dir/"
+		copy_secret_file "$RKE2_NODE_TOKEN_FILE" "$backup_dir"
 		log_info "Backed up node-token"
 	fi
 
