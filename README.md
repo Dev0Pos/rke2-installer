@@ -74,7 +74,7 @@ Or `--installer-sha256-url <url>` (sha256sum-style file). Either checksum flag t
 | `--installer-sha256` | Expected digest of the installer script |
 | `--installer-sha256-url` | Checksum file URL (bare hash or `hash  filename`) |
 
-Already installed + no `--force` + no `--version` → skip download (service is still enabled/started).
+Already installed + no `--force` + no `--version` → skip download. The unit is still `enable`d and `restart`ed (first wait 120s), so a re-run is not a no-op on a healthy node.
 
 Existing `/etc/rancher/rke2/config.yaml` is **not** overwritten when generating from flags. `--config` always copies. Generated or copied `config.yaml` is mode `0600` (it may contain a join token).
 
@@ -89,7 +89,7 @@ CNI tokens that drop daily: use the extended-tokens example (`service-account-ma
 ./scripts/rke2-installer.sh info --role server     # host, paths, dir sizes; no root
 ```
 
-`status` exits `1` if no `rke2-<role>.service` is found (unit search below). Ubuntu/Debian `get.rke2.io` installs land in `/usr/local/lib`. `info` always prints (including “not installed”) and uses `systemctl list-unit-files`, not that search. Server `info` lists API `https://localhost:6443`, node port `9345`, and default CNI text `Canal (Flannel + Calico)` (not probed).
+`status` exits `1` if no `rke2-<role>.service` is found (unit search below). Ubuntu/Debian `get.rke2.io` installs land in `/usr/local/lib`. `info` always prints (including “not installed”) and uses `systemctl list-unit-files`, not that search. Server `info` lists API `https://localhost:6443`, node port `9345`, default CNI text `Canal (Flannel + Calico)` (not probed), and any files that exist in `RKE2_LOG_FILES`.
 
 Start path: `systemctl enable` + up to 3 `restart`s (first wait 120s, then 30s). Server then waits up to 60s for `etcd --config-file`. Failure: `journalctl -u rke2-<role> -e`.
 
@@ -100,11 +100,11 @@ Two entry points. The dedicated script is the operator path.
 | | `rke2-installer.sh uninstall --role …` | `rke2-uninstaller.sh` |
 |---|---|---|
 | Role | Required | Auto-detected with the same unit search as `status`; `--role` required if both exist |
-| Confirm | None | Type `yes` unless `--force` |
+| Confirm | None | Exact `yes` (any case). `y` / `true` cancel |
 | Dry-run | No | `--dry-run` (no root, no backup) |
 | Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token (dir `0700`, secret files `0600`) | Same + resolved unit file; `--backup-dir` overrides |
 | Official script | First executable match: override path, then `/usr/local/bin`, `/usr/bin` (RPM), `/opt/rke2/bin`. Agent also falls back from `rke2-agent-uninstall.sh` to `rke2-uninstall.sh`. | Stop/disable unit first, then the same search |
-| Data wipe | No | `--clean-data` removes `/var/lib/rancher/rke2`, `/etc/rancher/rke2`, `/opt/rke2`, `/usr/bin/rke2`, and the official uninstall scripts |
+| Data wipe | No | `--clean-data` removes `RKE2_DATA_DIRS`, `RKE2_BINARY_PATH`, and the preferred uninstall script paths only (not RPM `/usr/bin` copies). Not run if the official script exits non-zero |
 
 ```bash
 ./scripts/rke2-uninstaller.sh --dry-run --clean-data
@@ -121,7 +121,7 @@ sudo ./scripts/rke2-installer.sh uninstall --role server
 ./scripts/check-coverage.sh    # 100% line gate used by CI
 ```
 
-CI (`.github/workflows/ci.yml`): `bash -n`, ShellCheck, shfmt, those two scripts, plus `./scripts/build-release-artifacts.sh ci-smoke /tmp/rke2-dist`.
+CI (`.github/workflows/ci.yml`) runs on pushes to `main` and `cursor/**`, and on PRs targeting `main`: `bash -n`, ShellCheck, shfmt, those two scripts, plus `./scripts/build-release-artifacts.sh ci-smoke /tmp/rke2-dist`. Coverage is an xtrace line gate over `rke2-installer.sh` and `rke2-uninstaller.sh`.
 
 ## Release
 
@@ -150,18 +150,24 @@ Set before invoke (tests do this). Defaults:
 | `RKE2_AGENT_UNINSTALL_SCRIPT` | `/usr/local/bin/rke2-agent-uninstall.sh` (preferred; search continues if missing) |
 | `RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS` | `/usr/local/bin /usr/bin /opt/rke2/bin` |
 | `RKE2_BINARY_PATH` | `/usr/bin/rke2` (uninstaller `--clean-data` only) |
+| `RKE2_FSTAB_FILE` | `/etc/fstab` (`--auto-swapoff`) |
+| `RKE2_OS_RELEASE_FILE` | `/etc/os-release` |
+| `RKE2_LOG_FILES` | `/var/log/rke2.log /var/log/rke2-server.log /var/log/rke2-agent.log` (`info` only) |
 
 `status` and `rke2-uninstaller.sh` then fall back to `systemctl show --property=FragmentPath` if those dirs miss the unit.
 
 ## Pitfalls
 
-- Re-run without `--force`/`--version` will not upgrade an existing binary.
+- Re-run without `--force`/`--version` will not upgrade an existing binary, but still `systemctl restart`s the unit (first wait 120s).
 - Flag-generated config will not replace an existing `config.yaml`.
 - `--server-url` on `--role server` is ignored unless you pass `--config`.
 - Agent `--config` still needs `--token` / `--token-file` on the CLI; a `token:` in the YAML is not enough.
-- Checksum URL file: first 64-hex digest whose optional 2nd field is empty, equals `RKE2_INSTALL_URL` (or its basename, default `get.rke2.io`), or equals the tempfile path. Other filenames are skipped.
+- Checksum URL file: first 64-hex digest whose optional 2nd field is empty, equals `RKE2_INSTALL_URL` (or its basename, default `get.rke2.io`), or equals the tempfile path/basename. A leading `*` (sha256sum binary mode) is stripped. Other filenames are skipped.
 - First `rke2-server` start blocks ~2 minutes for etcd.
 - Both unit files installed → dedicated uninstaller needs `--role`.
+- Dedicated confirm is the word `yes` (any case). `y` cancels.
+- Official uninstall script non-zero exit is fatal (`set -e`). Dedicated `--clean-data` does not run after that.
+- `--clean-data` deletes only the preferred uninstall script paths (`RKE2_SERVER_UNINSTALL_SCRIPT` / `RKE2_AGENT_UNINSTALL_SCRIPT`, default `/usr/local/bin`). RPM copies in `/usr/bin` stay. Relocated `/opt/rke2/bin` scripts go away only because `/opt/rke2` is in `RKE2_DATA_DIRS`.
 - `status` is not a health probe; it only requires a resolvable unit file (tarball, RPM, relocated, or `FragmentPath`).
 - Dedicated uninstaller refuses to run if that search finds nothing; `rke2-installer.sh uninstall` still only needs the official uninstall script.
 
