@@ -76,7 +76,7 @@ Or `--installer-sha256-url <url>` (sha256sum-style file). Either checksum flag t
 
 Already installed + no `--force` + no `--version` → skip download (service is still enabled/started).
 
-Existing `/etc/rancher/rke2/config.yaml` is **not** overwritten when generating from flags. `--config` always copies.
+Existing `/etc/rancher/rke2/config.yaml` is **not** overwritten when generating from flags. `--config` always copies. Generated or copied `config.yaml` is mode `0600` (it may contain a join token).
 
 Examples: `examples/server-config.yaml`, `examples/agent-config.yaml`, `examples/server-config-extended-tokens.yaml`.
 
@@ -102,7 +102,7 @@ Two entry points. The dedicated script is the operator path.
 | Role | Required | Auto-detected with the same unit search as `status`; `--role` required if both exist |
 | Confirm | None | Type `yes` unless `--force` |
 | Dry-run | No | `--dry-run` (no root, no backup) |
-| Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token | Same + resolved unit file; `--backup-dir` overrides |
+| Backup | `/tmp/rke2-backup-<timestamp>`: config, kubeconfig (server), node-token (dir `0700`, secret files `0600`) | Same + resolved unit file; `--backup-dir` overrides |
 | Official script | First executable match: override path, then `/usr/local/bin`, `/usr/bin` (RPM), `/opt/rke2/bin`. Agent also falls back from `rke2-agent-uninstall.sh` to `rke2-uninstall.sh`. | Stop/disable unit first, then the same search |
 | Data wipe | No | `--clean-data` removes `/var/lib/rancher/rke2`, `/etc/rancher/rke2`, `/opt/rke2`, `/usr/bin/rke2`, and the official uninstall scripts |
 
@@ -112,7 +112,7 @@ sudo ./scripts/rke2-uninstaller.sh --role server --force
 sudo ./scripts/rke2-installer.sh uninstall --role server
 ```
 
-`/tmp` backups are ephemeral. `--clean-data` is irreversible.
+`/tmp` backups are ephemeral. Secret files in the backup are mode `0600`; a backup directory this script creates is `0700`. `--clean-data` is irreversible.
 
 ## Checks
 
