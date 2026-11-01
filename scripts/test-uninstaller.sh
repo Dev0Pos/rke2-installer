@@ -305,6 +305,97 @@ EOF
 	teardown_uninstaller_test_env
 }
 
+test_uninstall_script_precedence_and_role_safety() {
+	setup_uninstaller_test_env
+
+	local default_dirs
+	default_dirs="$(
+		unset RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS
+		eval "$(grep -E '^RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS=' "$UNINSTALLER_SCRIPT")"
+		printf '%s' "$RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS"
+	)"
+	[[ "$default_dirs" == "/usr/local/bin /usr/bin /opt/rke2/bin" ]]
+
+	local rpm_dir="$TEST_ROOT/usr/bin"
+	mkdir -p "$rpm_dir" "$(dirname "$RKE2_NODE_TOKEN_FILE")" "$(dirname "$RKE2_SERVER_UNINSTALL_SCRIPT")" "$(dirname "$RKE2_AGENT_UNINSTALL_SCRIPT")"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	systemctl() {
+		case "$1" in
+		stop | disable | list-unit-files | is-active) return 0 ;;
+		*) return 0 ;;
+		esac
+	}
+
+	cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+echo preferred-server >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo rpm-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$RKE2_SERVER_UNINSTALL_SCRIPT" "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script server)" == "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]
+	do_uninstall server "$TEST_ROOT/backup" false
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "preferred-server"
+	if assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-should-not-run"; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	rm -f "$RKE2_BACKUP_ROOT/uninstall.log"
+	chmod a-x "$RKE2_SERVER_UNINSTALL_SCRIPT"
+	[[ "$(find_uninstall_script server)" == "$rpm_dir/rke2-uninstall.sh" ]]
+	do_uninstall server "$TEST_ROOT/backup" false
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-should-not-run"
+
+	rm -f "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT" "$RKE2_BACKUP_ROOT/uninstall.log"
+	cat >"$rpm_dir/rke2-agent-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo agent-specific >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo generic-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$rpm_dir/rke2-agent-uninstall.sh" "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script agent)" == "$rpm_dir/rke2-agent-uninstall.sh" ]]
+	do_uninstall agent "$TEST_ROOT/backup" false
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "agent-specific"
+	if assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "generic-should-not-run"; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	rm -f "$rpm_dir/rke2-uninstall.sh" "$RKE2_BACKUP_ROOT/uninstall.log"
+	if find_uninstall_script server >/tmp/uninstaller-test.err 2>&1; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	do_uninstall server "$TEST_ROOT/backup" false
+	if [[ -f "$RKE2_BACKUP_ROOT/uninstall.log" ]]; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	rm -f "$rpm_dir/rke2-agent-uninstall.sh"
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo nonexec-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	if find_uninstall_script server >/tmp/uninstaller-test.err 2>&1; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+	if find_uninstall_script agent >/tmp/uninstaller-test.err 2>&1; then
+		teardown_uninstaller_test_env
+		return 1
+	fi
+
+	teardown_uninstaller_test_env
+}
+
 test_main_dispatch() {
 	setup_uninstaller_test_env
 
@@ -400,6 +491,7 @@ main() {
 	run_test "dry run prompt and uninstall paths" test_dry_run_confirm_and_uninstall
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
+	run_test "uninstall script precedence and role safety" test_uninstall_script_precedence_and_role_safety
 	run_test "main dispatch and validation" test_main_dispatch
 	run_test "role safety contracts" test_role_safety_contracts
 
