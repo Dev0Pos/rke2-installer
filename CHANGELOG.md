@@ -20,3 +20,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README documents checksum install, dual uninstallers, config overwrite rules, path overrides, and operator pitfalls.
 - `status` and `rke2-uninstaller.sh` resolve unit files across tarball (`/usr/local/lib`), RPM (`/usr/lib`), relocated (`/etc/systemd`), and systemd `FragmentPath` layouts.
 - README documents unit-file search order, `RKE2_SYSTEMD_UNIT_SEARCH_DIRS`, and Ubuntu/Debian tarball install paths.
+- README documents `--clean-data` preferred-path-only wipe, official-script failure abort, exact-`yes` confirm, remaining path env vars, re-run `systemctl restart`, and CI `cursor/**` triggers.
