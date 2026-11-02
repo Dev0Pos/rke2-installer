@@ -4,7 +4,7 @@
 # RKE2 server address (port 9345)
 server: "https://rke2.example.com:9345"
 
-# Cluster token (if not set via installer flags)
+# YAML token is not enough for --role agent; still pass --token or --token-file
 token: "supersecret-token"
 
 

@@ -96,6 +96,10 @@ test_backup_and_cleanup() {
 	[[ -f "$backup_dir/rke2.yaml" ]]
 	[[ -f "$backup_dir/node-token" ]]
 	[[ -f "$backup_dir/rke2-server.service" ]]
+	[[ "$(stat -c '%a' "$backup_dir")" == "700" ]]
+	[[ "$(stat -c '%a' "$backup_dir/config.yaml")" == "600" ]]
+	[[ "$(stat -c '%a' "$backup_dir/rke2.yaml")" == "600" ]]
+	[[ "$(stat -c '%a' "$backup_dir/node-token")" == "600" ]]
 
 	mkdir -p "$TEST_ROOT/var/lib/rancher/rke2" "$TEST_ROOT/opt/rke2"
 	mkdir -p "$(dirname "$RKE2_SERVER_UNINSTALL_SCRIPT")" "$(dirname "$RKE2_AGENT_UNINSTALL_SCRIPT")"
@@ -396,6 +400,27 @@ EOF
 	teardown_uninstaller_test_env
 }
 
+test_secret_backup_dir_modes() {
+	setup_uninstaller_test_env
+
+	local fresh="$TEST_ROOT/fresh-backup"
+	prepare_secret_backup_dir "$fresh"
+	[[ "$(stat -c '%a' "$fresh")" == "700" ]]
+
+	local existing="$TEST_ROOT/existing-backup"
+	mkdir -p "$existing"
+	chmod 0755 "$existing"
+	prepare_secret_backup_dir "$existing"
+	[[ "$(stat -c '%a' "$existing")" == "755" ]]
+
+	echo "kube" >"$TEST_ROOT/rke2.yaml"
+	chmod 0644 "$TEST_ROOT/rke2.yaml"
+	copy_secret_file "$TEST_ROOT/rke2.yaml" "$existing"
+	[[ "$(stat -c '%a' "$existing/rke2.yaml")" == "600" ]]
+
+	teardown_uninstaller_test_env
+}
+
 test_main_dispatch() {
 	setup_uninstaller_test_env
 
@@ -461,6 +486,9 @@ test_role_safety_contracts() {
 	[[ -f "$agent_backup/config.yaml" ]]
 	[[ -f "$agent_backup/node-token" ]]
 	[[ -f "$agent_backup/rke2-agent.service" ]]
+	[[ "$(stat -c '%a' "$agent_backup")" == "700" ]]
+	[[ "$(stat -c '%a' "$agent_backup/config.yaml")" == "600" ]]
+	[[ "$(stat -c '%a' "$agent_backup/node-token")" == "600" ]]
 	if [[ -f "$agent_backup/rke2.yaml" ]]; then
 		teardown_uninstaller_test_env
 		return 1
@@ -492,6 +520,7 @@ main() {
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
 	run_test "uninstall script precedence and role safety" test_uninstall_script_precedence_and_role_safety
+	run_test "secret backup directory and file modes" test_secret_backup_dir_modes
 	run_test "main dispatch and validation" test_main_dispatch
 	run_test "role safety contracts" test_role_safety_contracts
 

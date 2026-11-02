@@ -88,6 +88,7 @@ test_write_config_and_copy_and_token() {
 	[[ -f "$RKE2_CONFIG_FILE" ]]
 	assert_contains "$(cat "$RKE2_CONFIG_FILE")" "token: \"abc\""
 	assert_contains "$(cat "$RKE2_CONFIG_FILE")" "cluster-init: true"
+	[[ "$(stat -c '%a' "$RKE2_CONFIG_FILE")" == "600" ]]
 
 	rm -f "$RKE2_CONFIG_FILE"
 	write_config_from_flags agent "def" "https://server:9345" "false"
@@ -101,8 +102,10 @@ test_write_config_and_copy_and_token() {
 
 	local source_cfg="$TEST_ROOT/source-config.yaml"
 	echo "token: copied" >"$source_cfg"
+	chmod 0644 "$source_cfg"
 	copy_config_if_provided "$source_cfg"
 	assert_contains "$(cat "$RKE2_CONFIG_FILE")" "token: copied"
+	[[ "$(stat -c '%a' "$RKE2_CONFIG_FILE")" == "600" ]]
 
 	# --config always replaces an existing dest config; flag generation never does.
 	echo "old: true" >"$RKE2_CONFIG_FILE"
@@ -314,6 +317,13 @@ echo agent-uninstall >> "${RKE2_BACKUP_ROOT}/uninstall.log"
 EOF
 	chmod +x "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT"
 	do_uninstall server
+	local server_backup=""
+	server_backup="$(find "$RKE2_BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'rke2-backup-*' | sort | tail -n 1)"
+	[[ -n "$server_backup" ]]
+	[[ "$(stat -c '%a' "$server_backup")" == "700" ]]
+	[[ "$(stat -c '%a' "$server_backup/config.yaml")" == "600" ]]
+	[[ "$(stat -c '%a' "$server_backup/rke2.yaml")" == "600" ]]
+	[[ "$(stat -c '%a' "$server_backup/node-token")" == "600" ]]
 	do_uninstall agent
 	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "server-uninstall"
 	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "agent-uninstall"
@@ -848,6 +858,28 @@ test_unit_search_defaults_and_precedence() {
 	teardown_installer_test_env
 }
 
+test_secret_backup_dir_modes() {
+	setup_installer_test_env
+
+	local fresh="$TEST_ROOT/fresh-backup"
+	prepare_secret_backup_dir "$fresh"
+	[[ "$(stat -c '%a' "$fresh")" == "700" ]]
+
+	# Existing destination keeps its mode so a shared --backup-dir is not chmod'd.
+	local existing="$TEST_ROOT/existing-backup"
+	mkdir -p "$existing"
+	chmod 0755 "$existing"
+	prepare_secret_backup_dir "$existing"
+	[[ "$(stat -c '%a' "$existing")" == "755" ]]
+
+	echo "tok" >"$TEST_ROOT/plain-token"
+	chmod 0644 "$TEST_ROOT/plain-token"
+	copy_secret_file "$TEST_ROOT/plain-token" "$existing"
+	[[ "$(stat -c '%a' "$existing/plain-token")" == "600" ]]
+
+	teardown_installer_test_env
+}
+
 test_example_files() {
 	[[ -f "$SCRIPT_DIR/../examples/server-config.yaml" ]]
 	[[ -f "$SCRIPT_DIR/../examples/agent-config.yaml" ]]
@@ -974,6 +1006,7 @@ main() {
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
 	run_test "uninstall script precedence and role safety" test_uninstall_script_precedence_and_role_safety
+	run_test "secret backup directory and file modes" test_secret_backup_dir_modes
 	run_test "default unit search paths and precedence" test_unit_search_defaults_and_precedence
 	run_test "example files validation" test_example_files
 	run_test "checksum parsing and config contracts" test_checksum_and_config_contracts
