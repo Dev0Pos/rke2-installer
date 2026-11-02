@@ -722,6 +722,95 @@ EOF
 	teardown_installer_test_env
 }
 
+test_uninstall_script_precedence_and_role_safety() {
+	setup_installer_test_env
+
+	# Documented get.rke2.io layouts: tarball, RPM, relocated prefix.
+	local default_dirs
+	default_dirs="$(
+		unset RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS
+		eval "$(grep -E '^RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS=' "$INSTALLER_SCRIPT")"
+		printf '%s' "$RKE2_UNINSTALL_SCRIPT_SEARCH_DIRS"
+	)"
+	[[ "$default_dirs" == "/usr/local/bin /usr/bin /opt/rke2/bin" ]]
+
+	local rpm_dir="$TEST_ROOT/usr/bin"
+	mkdir -p "$rpm_dir" "$(dirname "$RKE2_SERVER_UNINSTALL_SCRIPT")" "$(dirname "$RKE2_AGENT_UNINSTALL_SCRIPT")"
+
+	# An executable preferred path wins over leftover search-dir scripts.
+	cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOF'
+#!/usr/bin/env bash
+echo preferred-server >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo rpm-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$RKE2_SERVER_UNINSTALL_SCRIPT" "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script server)" == "$RKE2_SERVER_UNINSTALL_SCRIPT" ]]
+	do_uninstall server
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "preferred-server"
+	if assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-should-not-run"; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	# A stale non-executable leftover at the preferred path must not hide RPM.
+	rm -f "$RKE2_BACKUP_ROOT/uninstall.log"
+	chmod a-x "$RKE2_SERVER_UNINSTALL_SCRIPT"
+	[[ "$(find_uninstall_script server)" == "$rpm_dir/rke2-uninstall.sh" ]]
+	do_uninstall server
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "rpm-should-not-run"
+
+	# Agent prefers the agent-specific name when both scripts exist.
+	rm -f "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT" "$RKE2_BACKUP_ROOT/uninstall.log"
+	cat >"$rpm_dir/rke2-agent-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo agent-specific >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo generic-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	chmod +x "$rpm_dir/rke2-agent-uninstall.sh" "$rpm_dir/rke2-uninstall.sh"
+	[[ "$(find_uninstall_script agent)" == "$rpm_dir/rke2-agent-uninstall.sh" ]]
+	do_uninstall agent
+	assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "agent-specific"
+	if assert_contains "$(cat "$RKE2_BACKUP_ROOT/uninstall.log")" "generic-should-not-run"; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	# Server never selects rke2-agent-uninstall.sh, even if that is the only file.
+	rm -f "$rpm_dir/rke2-uninstall.sh" "$RKE2_BACKUP_ROOT/uninstall.log"
+	if find_uninstall_script server >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+	do_uninstall server
+	if [[ -f "$RKE2_BACKUP_ROOT/uninstall.log" ]]; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	# Discovery requires +x, not merely a present file.
+	rm -f "$rpm_dir/rke2-agent-uninstall.sh"
+	cat >"$rpm_dir/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+echo nonexec-should-not-run >> "${RKE2_BACKUP_ROOT}/uninstall.log"
+EOF
+	if find_uninstall_script server >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+	if find_uninstall_script agent >/tmp/installer-test.err 2>&1; then
+		teardown_installer_test_env
+		return 1
+	fi
+
+	teardown_installer_test_env
+}
+
 test_unit_search_defaults_and_precedence() {
 	setup_installer_test_env
 
@@ -916,6 +1005,7 @@ main() {
 	run_test "extended error-path coverage" test_additional_error_paths_for_coverage
 	run_test "unit file discovery across install layouts" test_unit_file_discovery
 	run_test "uninstall script discovery across install layouts" test_uninstall_script_discovery
+	run_test "uninstall script precedence and role safety" test_uninstall_script_precedence_and_role_safety
 	run_test "secret backup directory and file modes" test_secret_backup_dir_modes
 	run_test "default unit search paths and precedence" test_unit_search_defaults_and_precedence
 	run_test "example files validation" test_example_files

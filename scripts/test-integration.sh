@@ -315,6 +315,81 @@ EOF
 	teardown_env
 }
 
+test_uninstall_script_precedence_and_role_safety() {
+	setup_env
+
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-server.service"
+	touch "$RKE2_SYSTEMD_UNIT_DIR/rke2-agent.service"
+	mkdir -p "$TEST_ROOT/usr/bin" "$TEST_ROOT/var/lib/rancher/rke2"
+	echo keep-me >"$TEST_ROOT/var/lib/rancher/rke2/cluster.db"
+
+	# Stale non-executable leftover at the tarball path must not hide RPM.
+	cat >"$RKE2_SERVER_UNINSTALL_SCRIPT" <<'EOF'
+#!/bin/sh
+echo "preferred-should-not-run" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	cat >"$TEST_ROOT/usr/bin/rke2-uninstall.sh" <<'EOF'
+#!/bin/sh
+set -eu
+echo "rpm-after-stale-preferred" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	chmod +x "$TEST_ROOT/usr/bin/rke2-uninstall.sh"
+	"$INSTALLER_SCRIPT" uninstall --role server
+	assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "rpm-after-stale-preferred"
+	if assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "preferred-should-not-run"; then
+		teardown_env
+		return 1
+	fi
+
+	# Mixed leftovers: agent must run the agent-specific script, not the generic one.
+	rm -f "$MOCK_STATE_DIR/uninstall.log" "$RKE2_SERVER_UNINSTALL_SCRIPT" "$RKE2_AGENT_UNINSTALL_SCRIPT"
+	cat >"$TEST_ROOT/usr/bin/rke2-agent-uninstall.sh" <<'EOF'
+#!/bin/sh
+set -eu
+echo "agent-specific" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	cat >"$TEST_ROOT/usr/bin/rke2-uninstall.sh" <<'EOF'
+#!/bin/sh
+set -eu
+echo "generic-should-not-run" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	chmod +x "$TEST_ROOT/usr/bin/rke2-agent-uninstall.sh" "$TEST_ROOT/usr/bin/rke2-uninstall.sh"
+	"$UNINSTALLER_SCRIPT" --role agent --force
+	assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "agent-specific"
+	if assert_contains "$(cat "$MOCK_STATE_DIR/uninstall.log")" "generic-should-not-run"; then
+		teardown_env
+		return 1
+	fi
+
+	# Server must not execute an agent-only uninstall script.
+	rm -f "$TEST_ROOT/usr/bin/rke2-uninstall.sh" "$TEST_ROOT/usr/bin/rke2-agent-uninstall.sh" "$MOCK_STATE_DIR/uninstall.log"
+	cat >"$TEST_ROOT/usr/bin/rke2-agent-uninstall.sh" <<'EOF'
+#!/bin/sh
+set -eu
+echo "agent-only-must-not-run" >> "${MOCK_STATE_DIR}/uninstall.log"
+EOF
+	chmod +x "$TEST_ROOT/usr/bin/rke2-agent-uninstall.sh"
+	"$INSTALLER_SCRIPT" uninstall --role server
+	if [[ -f "$MOCK_STATE_DIR/uninstall.log" ]]; then
+		teardown_env
+		return 1
+	fi
+
+	# Search-dir official uninstall that exits 1 is fatal; --clean-data must not run.
+	cat >"$TEST_ROOT/usr/bin/rke2-uninstall.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+	chmod +x "$TEST_ROOT/usr/bin/rke2-uninstall.sh"
+	if "$UNINSTALLER_SCRIPT" --role server --force --clean-data --backup-dir "$TEST_ROOT/failing-search-backup" >/tmp/rke2-integration.err 2>&1; then
+		teardown_env
+		return 1
+	fi
+	assert_file_exists "$TEST_ROOT/var/lib/rancher/rke2/cluster.db"
+
+	teardown_env
+}
+
 test_tarball_unit_layout_and_agent_token_cli() {
 	setup_env
 
@@ -394,6 +469,8 @@ main() {
 	log_info "✓ uninstaller role safety and release artifacts"
 	test_rpm_layout_uninstall_scripts
 	log_info "✓ RPM/tarball uninstall script search paths"
+	test_uninstall_script_precedence_and_role_safety
+	log_info "✓ uninstall script precedence and role safety"
 	test_tarball_unit_layout_and_agent_token_cli
 	log_info "✓ tarball unit layout and agent CLI token contract"
 	log_info "All integration tests passed"
